@@ -1,7 +1,6 @@
-//! The store of boot sets: after its header, three entries of the boot
-//! partition's bytes and then the init_boot partition's. The installed
-//! system's saves take turns between the first two, so that the last whole
-//! one stays while the next is written; the other system's is the third.
+//! Each boot-set entry holds a slot's boot and init_boot images. The shared
+//! store has two alternating primary backups and one guest entry. Additional
+//! guests use single-entry stores of their own.
 
 use crate::state::{Saved, Store, Written};
 use anyhow::{ensure, Context, Result};
@@ -26,9 +25,17 @@ impl Store {
         HEADER + ENTRIES * (boot + init_boot)
     }
 
+    /// A guest with its own store needs only its own boot set.
+    pub fn guest_size(boot: u64, init_boot: u64) -> u64 {
+        HEADER + boot + init_boot
+    }
+
     /// Where `entry` starts in the store.
-    fn offset(&self, entry: u32) -> u64 {
-        HEADER + u64::from(entry) * (self.boot + self.init_boot)
+    fn offset(&self, entry: u32) -> Result<u64> {
+        let width = self.boot.checked_add(self.init_boot).context("boot set is too large")?;
+        let capacity = self.area.size.saturating_sub(HEADER).checked_div(width).context("empty boot set")?;
+        ensure!(u64::from(entry) < capacity, "entry {entry} is outside the boot store");
+        Ok(HEADER + u64::from(entry) * width)
     }
 
     /// The entry the installed system's next save goes to: the one its last
@@ -96,12 +103,13 @@ fn parts(store: &Store, dir: &Path, slot: Slot) -> Vec<(&'static str, PathBuf, u
 /// Copy the boot set in the partitions of `slot`, among the links in
 /// `dir`, into `entry` of the store at `device`, and read the entry back.
 pub fn save(store: &Store, device: &Path, entry: u32, dir: &Path, slot: Slot) -> Result<Saved> {
+    let at = store.offset(entry)?;
     let mut out = open(device, true)?;
     let mut sums = Vec::new();
     for (_, path, len, within) in parts(store, dir, slot) {
         let mut from = open(&path, false)?;
         skyward_block::drop_cache(&from)?;
-        out.seek(SeekFrom::Start(store.offset(entry) + within))?;
+        out.seek(SeekFrom::Start(at + within))?;
         let sum = copy(&mut from, &mut out, len).with_context(|| format!("copy {} into the store", path.display()))?;
         sums.push(sum);
     }
@@ -114,7 +122,7 @@ pub fn save(store: &Store, device: &Path, entry: u32, dir: &Path, slot: Slot) ->
 /// Check that the entry `saved` names still holds what was saved in it.
 pub fn check(store: &Store, device: &Path, saved: &Saved) -> Result<()> {
     let mut f = open(device, false)?;
-    let at = store.offset(saved.entry);
+    let at = store.offset(saved.entry)?;
     ensure!(sum(&mut f, at, store.boot)? == saved.boot, "the store's entry {} holds another boot image than was saved", saved.entry);
     if store.init_boot > 0 {
         ensure!(sum(&mut f, at + store.boot, store.init_boot)? == saved.init_boot, "the store's entry {} holds another init_boot image than was saved", saved.entry);
@@ -127,7 +135,7 @@ pub fn check(store: &Store, device: &Path, saved: &Saved) -> Result<()> {
 pub fn init_boot(store: &Store, device: &Path, saved: &Saved) -> Result<Vec<u8>> {
     let mut f = open(device, false)?;
     skyward_block::drop_cache(&f)?;
-    f.seek(SeekFrom::Start(store.offset(saved.entry) + store.boot))?;
+    f.seek(SeekFrom::Start(store.offset(saved.entry)? + store.boot))?;
     let mut image = vec![0u8; store.init_boot as usize];
     f.read_exact(&mut image).with_context(|| format!("read {}", device.display()))?;
     ensure!(hex::encode(Sha256::digest(&image)) == saved.init_boot, "the store's entry {} holds another init_boot image than was saved", saved.entry);
@@ -164,7 +172,7 @@ pub fn restore(store: &Store, device: &Path, saved: &Saved, dir: &Path, slot: Sl
                 copy(&mut padded, &mut out, len).with_context(|| format!("write {}", path.display()))?
             }
             None => {
-                from.seek(SeekFrom::Start(store.offset(saved.entry) + within))?;
+                from.seek(SeekFrom::Start(store.offset(saved.entry)? + within))?;
                 copy(&mut from, &mut out, len).with_context(|| format!("write {}", path.display()))?;
                 want.clone()
             }
@@ -183,7 +191,7 @@ pub fn put(store: &Store, device: &Path, entry: u32, boot: &mut dyn Read, boot_l
     ensure!(boot_len <= store.boot, "the boot image takes {boot_len} bytes, more than the {} of the boot partition", store.boot);
     ensure!(init_boot.len() as u64 <= store.init_boot, "the init_boot image takes {} bytes, more than the {} of the init_boot partition", init_boot.len(), store.init_boot);
     let mut out = open(device, true)?;
-    out.seek(SeekFrom::Start(store.offset(entry)))?;
+    out.seek(SeekFrom::Start(store.offset(entry)?))?;
     let boot_sum = copy(&mut boot.take(boot_len).chain(io::repeat(0).take(store.boot - boot_len)), &mut out, store.boot)?;
     let init_sum = copy(&mut init_boot.chain(io::repeat(0).take(store.init_boot - init_boot.len() as u64)), &mut out, store.init_boot)?;
     out.sync_all().with_context(|| format!("sync {}", device.display()))?;
@@ -261,7 +269,7 @@ pub(crate) mod tests {
         let (store, device) = bench(dir.path());
         let saved = put(&store, &device, OTHER, &mut &[7u8; 8192][..], 8192, &[9u8; 100]).unwrap();
         let mut bytes = std::fs::read(&device).unwrap();
-        bytes[(store.offset(OTHER) + store.boot + 50) as usize] ^= 1;
+        bytes[(store.offset(OTHER).unwrap() + store.boot + 50) as usize] ^= 1;
         std::fs::write(&device, bytes).unwrap();
         assert!(init_boot(&store, &device, &saved).is_err());
     }
@@ -284,5 +292,17 @@ pub(crate) mod tests {
         assert_eq!(Store::next_save(None), 0);
         assert_eq!(Store::next_save(Some(&Saved { entry: 0, boot: String::new(), init_boot: String::new() })), 1);
         assert_eq!(Store::next_save(Some(&Saved { entry: 1, boot: String::new(), init_boot: String::new() })), 0);
+    }
+
+    #[test]
+    fn a_dedicated_guest_store_holds_exactly_one_boot_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut guest, device) = bench(dir.path());
+        guest.area.size = Store::guest_size(guest.boot, guest.init_boot);
+        let capacity = guest.area.size;
+        OpenOptions::new().write(true).open(&device).unwrap().set_len(capacity).unwrap();
+        put(&guest, &device, 0, &mut &[1u8; 300][..], 300, &[2; 100]).unwrap();
+        assert!(put(&guest, &device, OTHER, &mut &[9u8; 100][..], 100, &[]).is_err());
+        assert_eq!(std::fs::metadata(&device).unwrap().len(), capacity);
     }
 }

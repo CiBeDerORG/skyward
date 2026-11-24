@@ -2691,6 +2691,11 @@ pub enum SystemMark {
 const SYSTEM_CARD_DP: f32 = 132.0;
 const SYSTEM_NAME_DP: f32 = 30.0;
 
+/// Room for additional cards on a scrolling systems page.
+pub fn system_cards_height(t: &Theme, count: usize) -> f32 {
+    count as f32 * (t.m.dp(SYSTEM_CARD_DP) + t.m.card_gap)
+}
+
 /// The systems as big cards one over the other: each a choice of a list
 /// grown large, in the same type and colours, its name in the type of a
 /// page's title. The rows are the cards.

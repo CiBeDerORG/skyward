@@ -105,7 +105,7 @@ pub fn find(query: &str, l: Lang) -> Vec<&'static Entry> {
     }
     let rank = |e: &Entry| {
         let keys = || l.pick(e.keys).split(' ').chain(Lang::En.pick(e.keys).split(' '));
-        if typed(l.pick(e.title)).contains(&q) {
+        if typed(l.pick(e.title)).contains(&q) || (e.screen == Screen::Systems && typed(l.pick(texts::search::FORMER_SYSTEMS_TITLE)).contains(&q)) {
             Some(0)
         } else if keys().any(|k| k.starts_with(&q)) {
             Some(1)
@@ -171,10 +171,13 @@ mod tests {
     }
 
     #[test]
-    fn the_second_system_is_found_where_the_phone_can_hold_one() {
-        assert_eq!(titles("sxt"), ["双系统"]);
-        assert_eq!(titles("qiehuan"), ["双系统"]);
-        assert_eq!(find("dual", Lang::En).iter().map(|e| Lang::En.pick(e.title)).collect::<Vec<_>>(), ["Dual boot"]);
+    fn multiboot_is_found_by_its_new_and_old_names() {
+        assert_eq!(titles("多系统"), ["多系统"]);
+        assert_eq!(titles("双系统"), ["多系统"]);
+        assert_eq!(titles("sxt"), ["多系统"]);
+        assert_eq!(titles("qiehuan"), ["多系统"]);
+        assert_eq!(find("dual", Lang::En).iter().map(|e| Lang::En.pick(e.title)).collect::<Vec<_>>(), ["Multiboot"]);
+        assert_eq!(find("dual boot", Lang::En).iter().map(|e| Lang::En.pick(e.title)).collect::<Vec<_>>(), ["Multiboot"]);
         assert!(find_on("shuangxitong", Lang::Hans, |s| s != Screen::Systems).is_empty());
     }
 

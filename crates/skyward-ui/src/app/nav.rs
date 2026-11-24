@@ -100,7 +100,7 @@ impl App {
                     return fx;
                 }
                 self.state.system_pick = None;
-                self.state.asking_delete = false;
+                self.state.remove_system = None;
             }
             Screen::Files => {
                 if let Some(up) = self.state.files.up() {

@@ -17,10 +17,21 @@ pub struct SystemChoice {
 
 /// The system that starts, as the runtime last read the systems.
 pub fn starting(systems: &Overview) -> Who {
-    if systems.other_starts {
-        Who::Other
-    } else {
-        Who::Installed
+    systems.starting
+}
+
+/// Look up the guest by its package ID, which stays stable when guests are removed.
+pub(crate) fn guest(systems: &Overview, who: Who) -> Option<&skyward_systems::Other> {
+    match who {
+        Who::Guest(id) => systems.others.iter().find(|other| other.id == id),
+        Who::Installed => None,
+    }
+}
+
+pub(crate) fn can_switch(systems: &Overview, to: Who) -> bool {
+    to != systems.starting && match to {
+        Who::Installed => systems.held != skyward_systems::Held::Unrecorded,
+        Who::Guest(_) => guest(systems, to).is_some() && systems.held == skyward_systems::Held::Recorded,
     }
 }
 
@@ -59,6 +70,12 @@ impl App {
     /// The systems, as the runtime read them, or why it could not; work on
     /// them that was under way has ended.
     pub fn set_systems(&mut self, systems: Result<Overview, String>) {
+        if let Some(pick @ Who::Guest(_)) = self.state.system_pick
+            && systems.as_ref().ok().and_then(|read| guest(read, pick)).is_none()
+        {
+            self.state.system_pick = None;
+        }
+        self.state.remove_system = None;
         self.state.systems = Some(systems);
         self.state.systems_work = None;
         self.refresh();
@@ -162,12 +179,15 @@ mod tests {
     }
 
     /// The systems with a second one installed, the main one starting.
+    fn ubuntu() -> SystemId {
+        SystemId::new("ubuntu").unwrap()
+    }
+
     fn two_systems() -> Overview {
         Overview {
             installed: skyward_systems::Named { name: "HyperOS 3".into(), version: Some("OS3.0.308.0.WMACNXM".into()) },
-            other: Some(skyward_systems::Other { id: "ubuntu".into(), name: "Ubuntu Touch".into(), version: "24.04".into(), size: 16 << 30 }),
-            other_starts: false,
-            changed: false,
+            others: vec![skyward_systems::Other { id: ubuntu(), name: "Ubuntu Touch".into(), version: "24.04".into(), size: 16 << 30, changed: false }],
+            starting: Who::Installed,
             held: skyward_systems::Held::Recorded,
         }
     }
@@ -200,7 +220,7 @@ mod tests {
             let cx = Ctx { t: &t, f: &f, info: &i, state: &app.state, term: None, band: None };
             pages::render(Screen::Home, &cx).canvas.data.clone()
         };
-        assert!(named(two_systems()) != named(Overview { other_starts: true, ..two_systems() }), "the home page names the one that starts");
+        assert!(named(two_systems()) != named(Overview { starting: Who::Guest(ubuntu()), ..two_systems() }), "the home page names the one that starts");
     }
 
     #[test]
@@ -208,9 +228,9 @@ mod tests {
         let (f, i) = (fonts(), info());
         let mut app = systems_page(&f, &i, two_systems());
         assert!(!swipes(&mut app, &f, &i), "the main system starts already");
-        tap(&mut app, &f, &i, Action::PickSystem(Who::Other));
-        assert_eq!(swipe(&mut app, &f, &i, Confirm::SwitchSystem), vec![Effect::SwitchSystem(Who::Other)]);
-        assert_eq!((app.state.systems_work, app.state.system_pick), (Some(SystemsWork::Switching(Who::Other)), None));
+        tap(&mut app, &f, &i, Action::PickSystem(Who::Guest(ubuntu())));
+        assert_eq!(swipe(&mut app, &f, &i, Confirm::SwitchSystem(Who::Guest(ubuntu()))), vec![Effect::SwitchSystem(Who::Guest(ubuntu()))]);
+        assert_eq!((app.state.systems_work, app.state.system_pick), (Some(SystemsWork::Switching(Who::Guest(ubuntu()))), None));
         assert!(app.frame(&f, &i).hits.is_empty(), "nothing to tap while the boot partitions are written");
         // The card tapped darkens and comes back, as a row of a list does.
         app.tick(1000);
@@ -218,11 +238,11 @@ mod tests {
         assert_eq!((app.screen(), app.deadline(1000)), (Screen::Systems, Some(1000 + TOAST_MS)), "the page stays until they are, and says why");
         app.systems_work_failed("the store's header does not check", 0);
         assert_eq!(app.state.systems_work, None);
-        app.set_systems(Ok(Overview { other_starts: true, ..two_systems() }));
+        app.set_systems(Ok(Overview { starting: Who::Guest(ubuntu()), ..two_systems() }));
         tap(&mut app, &f, &i, Action::PickSystem(Who::Installed));
-        assert_eq!(swipe(&mut app, &f, &i, Confirm::SwitchSystem), vec![Effect::SwitchSystem(Who::Installed)]);
+        assert_eq!(swipe(&mut app, &f, &i, Confirm::SwitchSystem(Who::Installed)), vec![Effect::SwitchSystem(Who::Installed)]);
         app.set_systems(Ok(two_systems()));
-        tap(&mut app, &f, &i, Action::PickSystem(Who::Other));
+        tap(&mut app, &f, &i, Action::PickSystem(Who::Guest(ubuntu())));
         app.key(Key::Back, 0);
         assert_eq!((app.screen(), app.state.system_pick), (Screen::Home, None), "a pick left unswitched is put down");
     }
@@ -244,13 +264,13 @@ mod tests {
     fn boot_partitions_written_by_another_hand_are_told_of_and_written_over_once_swiped() {
         use skyward_systems::Held;
         let (f, i) = (fonts(), info());
-        let second_starts = Overview { other_starts: true, ..two_systems() };
+        let second_starts = Overview { starting: Who::Guest(ubuntu()), ..two_systems() };
         let rewritten = Overview { held: Held::Rewritten, ..second_starts.clone() };
         assert!(systems_drawn(&f, &i, rewritten.clone()) != systems_drawn(&f, &i, second_starts), "the page says they were written since");
         let mut app = systems_page(&f, &i, rewritten);
         assert!(!swipes(&mut app, &f, &i), "nothing is written until the main system is picked");
         tap(&mut app, &f, &i, Action::PickSystem(Who::Installed));
-        assert_eq!(swipe(&mut app, &f, &i, Confirm::SwitchSystem), vec![Effect::SwitchSystem(Who::Installed)]);
+        assert_eq!(swipe(&mut app, &f, &i, Confirm::SwitchSystem(Who::Installed)), vec![Effect::SwitchSystem(Who::Installed)]);
     }
 
     /// /metadata was erased while the boot partitions held a second
@@ -261,7 +281,7 @@ mod tests {
     fn boot_partitions_nothing_is_kept_of_are_not_shown_as_the_main_systems() {
         use skyward_systems::Held;
         let (f, i) = (fonts(), info());
-        let none_kept = Overview { other: None, ..two_systems() };
+        let none_kept = Overview { others: Vec::new(), ..two_systems() };
         let unrecorded = Overview { held: Held::Unrecorded, ..none_kept.clone() };
         assert!(systems_drawn(&f, &i, unrecorded.clone()) != systems_drawn(&f, &i, none_kept), "the page says what the partitions hold");
         let mut app = systems_page(&f, &i, unrecorded);
@@ -273,28 +293,74 @@ mod tests {
     fn the_second_system_waits_for_an_update_in_flight_and_the_main_one_does_not() {
         let (f, i) = (fonts(), DeviceInfo { snapshot: SnapshotState::Snapshotted, ..info() });
         let mut app = systems_page(&f, &i, two_systems());
-        tap(&mut app, &f, &i, Action::PickSystem(Who::Other));
+        tap(&mut app, &f, &i, Action::PickSystem(Who::Guest(ubuntu())));
         assert!(!swipes(&mut app, &f, &i), "nothing to swipe");
-        app.set_systems(Ok(Overview { other_starts: true, ..two_systems() }));
+        app.set_systems(Ok(Overview { starting: Who::Guest(ubuntu()), ..two_systems() }));
         tap(&mut app, &f, &i, Action::PickSystem(Who::Installed));
-        assert_eq!(swipe(&mut app, &f, &i, Confirm::SwitchSystem), vec![Effect::SwitchSystem(Who::Installed)], "back to the main system to merge it");
+        assert_eq!(swipe(&mut app, &f, &i, Confirm::SwitchSystem(Who::Installed)), vec![Effect::SwitchSystem(Who::Installed)], "back to the main system to merge it");
     }
 
     #[test]
     fn the_second_system_is_removed_once_asked_and_swiped() {
         let (f, i) = (fonts(), info());
         let mut app = systems_page(&f, &i, two_systems());
+        tap(&mut app, &f, &i, Action::PickSystem(Who::Guest(ubuntu())));
         assert!(app.frame(&f, &i).hits.iter().any(|h| h.action == Action::Open(Screen::Decrypt)), "the data partition is opened first");
         app.state.data = Data::Open;
         app.refresh();
-        tap(&mut app, &f, &i, Action::AskDelete);
-        assert_eq!(swipe(&mut app, &f, &i, Confirm::RemoveSystem), vec![Effect::RemoveSystem]);
-        assert_eq!((app.state.systems_work, app.state.asking_delete), (Some(SystemsWork::Removing), false));
-        app.set_systems(Ok(Overview { other: None, ..two_systems() }));
+        tap(&mut app, &f, &i, Action::AskRemoveSystem(ubuntu()));
+        assert_eq!(swipe(&mut app, &f, &i, Confirm::RemoveSystem(ubuntu())), vec![Effect::RemoveSystem(ubuntu())]);
+        assert_eq!((app.state.systems_work, app.state.remove_system), (Some(SystemsWork::Removing), None));
+        app.set_systems(Ok(Overview { others: Vec::new(), ..two_systems() }));
         assert_eq!(app.state.systems_work, None);
-        assert!(app.frame(&f, &i).hits.iter().all(|h| h.action != Action::AskDelete), "nothing left to remove");
+        assert!(app.frame(&f, &i).hits.iter().all(|h| h.action != Action::AskRemoveSystem(ubuntu())), "nothing left to remove");
         tap(&mut app, &f, &i, Action::Open(Screen::Install));
         assert_eq!(app.screen(), Screen::Install, "the empty place opens the install page");
+    }
+
+    #[test]
+    fn a_long_guest_list_scrolls_far_enough_to_reach_every_package_and_the_install_row() {
+        let (f, i) = (fonts(), info());
+        let mut systems = two_systems();
+        let sample = systems.others[0].clone();
+        for n in 1..24 {
+            let id = SystemId::new(&format!("guest-{n}")).unwrap();
+            systems.others.push(skyward_systems::Other { id, ..sample.clone() });
+        }
+        let mut app = systems_page(&f, &i, systems);
+        let frame = app.frame(&f, &i);
+        assert_eq!(frame.hits.iter().filter(|hit| matches!(hit.action, Action::PickSystem(Who::Guest(_)))).count(), 24);
+        let last = frame.hits.iter().find(|hit| hit.action == Action::Open(Screen::Install)).unwrap().rect;
+        assert!(last.y > (3 * H) as f32);
+        assert!(last.y + last.h <= frame.canvas.h as f32);
+    }
+
+    #[test]
+    fn a_guest_starts_another_guest_or_removes_only_the_selected_package() {
+        let (f, i) = (fonts(), info());
+        let mut systems = two_systems();
+        let second = SystemId::new("ubuntu-dev").unwrap();
+        let other = Who::Guest(second);
+        systems.starting = Who::Guest(ubuntu());
+        // Even guests with the same display name have independent controls.
+        systems.others.push(skyward_systems::Other { id: second, ..systems.others[0].clone() });
+        let mut app = systems_page(&f, &i, systems.clone());
+        assert!(app.frame(&f, &i).hits.iter().any(|h| h.action == Action::Open(Screen::Install)));
+        tap(&mut app, &f, &i, Action::PickSystem(other));
+        assert_eq!(swipe(&mut app, &f, &i, Confirm::SwitchSystem(other)), vec![Effect::SwitchSystem(other)]);
+
+        app.set_systems(Ok(systems.clone()));
+        app.state.data = Data::Open;
+        tap(&mut app, &f, &i, Action::PickSystem(other));
+        tap(&mut app, &f, &i, Action::AskRemoveSystem(second));
+        tap(&mut app, &f, &i, Action::PickSystem(Who::Guest(ubuntu())));
+        assert!(app.confirmed(Confirm::RemoveSystem(second), 0).is_empty());
+        tap(&mut app, &f, &i, Action::PickSystem(other));
+        tap(&mut app, &f, &i, Action::AskRemoveSystem(second));
+        systems.others.retain(|guest| guest.id != second);
+        app.set_systems(Ok(systems));
+        assert_eq!(app.state.system_pick, None);
+        assert!(app.confirmed(Confirm::RemoveSystem(second), 0).is_empty());
     }
 
     #[test]
@@ -338,10 +404,10 @@ mod tests {
         app.state.dual_boot = true;
         app.system_stopped("no partition userdata showed within 15s".into());
         assert_eq!(app.screen(), Screen::Systems);
-        app.set_systems(Ok(Overview { other_starts: true, ..two_systems() }));
+        app.set_systems(Ok(Overview { starting: Who::Guest(ubuntu()), ..two_systems() }));
         let page = app.frame(&f, &i);
         assert!(page.hits.iter().any(|h| h.action == Action::PickSystem(Who::Installed)), "the main system is there to switch back to");
-        assert!(!page.hits.iter().any(|h| h.action == Action::Confirm(Confirm::SwitchSystem)), "nothing is switched until one is picked");
+        assert!(!page.hits.iter().any(|h| matches!(h.action, Action::Confirm(Confirm::SwitchSystem(_)))), "nothing is switched until one is picked");
         app.key(Key::Back, 0);
         assert_eq!(app.screen(), Screen::Home);
         let opens = app.frame(&f, &i).hits.iter().filter(|h| h.action == Action::Open(Screen::Systems)).count();

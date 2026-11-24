@@ -128,11 +128,11 @@ until_merged = "The boot slot isn't switched until the update merges."
 until_dealt_with = "The boot slot isn't switched until the system deals with the update."
 until_read = "The boot slot isn't switched until the update's status can be read."
 
-# Why the second system does not start yet.
+# Why the guest system does not start yet.
 [snapshot.second_system]
-until_merged = "The second system doesn't start until the system update merges. Start the main system first, and let the update merge."
-until_dealt_with = "The second system doesn't start until the main system deals with the update."
-until_read = "The second system doesn't start until the update's status can be read."
+until_merged = "The guest system doesn't start until the system update merges. Start the main system first, and let the update merge."
+until_dealt_with = "The guest system doesn't start until the main system deals with the update."
+until_read = "The guest system doesn't start until the update's status can be read."
 
 # What an install script that writes to super does to the update.
 [snapshot.script]
@@ -419,7 +419,7 @@ unverified = "This zip's signature didn't verify. Turn off “Verify zip signatu
 panicked = "This update can't be installed now. Reboot to the system, then try again."
 system_asked = "The system asked for another system to be installed, which only goes in by hand on this phone."
 data_closed = "The other system goes into the data partition. Decrypt it first."
-system_installed = "{name} is installed already. Remove it in Dual boot, then try again."
+system_installed = "{name} is installed already. Remove it in Multiboot, then try again."
 no_room = "This system needs at least {least}, and the data partition has {room} to spare."
 
 # Why the system's request to erase the partitions it lists was not
@@ -658,7 +658,7 @@ language = "Language"
 time_zone = "Time zone"
 license = "Open source licenses"
 fonts = "UI fonts"
-dual_boot = "Dual boot"
+dual_boot = "Multiboot"
 install = "Install"
 backup = "Backup"
 restore = "Restore"
@@ -668,9 +668,9 @@ relabel = "Fix SELinux contexts"
 filesystems = "Filesystems"
 
 [home]
-# Under the word that the second system did not start.
+# Under the word that the guest system did not start.
 tap_to_see_why = "Tap to see why"
-no_second_system = "No second system"
+no_second_system = "No guest systems"
 
 # What the settings page says beside its Skyward update entry.
 [skyward_update]
@@ -779,7 +779,7 @@ ways = "Ways to install"
 choose_in_storage = "Choose a package or image in internal storage"
 choose_on_usb_drive = "Choose a package or image on the USB drive"
 sideload = "Run adb sideload on the computer"
-what_with_second_system = "Installs A/B full OTA packages, flashable zips with an install script and second systems' packages, and flashes partition images, sparse ones included: those of boot, init_boot, vendor_boot, recovery, dtbo, vbmeta, super and the logical partitions in super, and any other named after its partition, such as modem.img. A system update installs to the other slot, which starts after a reboot; a second system installs into the data partition, and Dual boot switches to it. Choosing a file lists only folders and .zip and .img files."
+what_with_second_system = "Installs A/B full OTA packages, flashable zips with an install script and guest system packages, and flashes partition images, sparse ones included: those of boot, init_boot, vendor_boot, recovery, dtbo, vbmeta, super and the logical partitions in super, and any other named after its partition, such as modem.img. A system update installs to the other slot, which starts after a reboot; a guest system installs into the data partition, and Multiboot switches to it. Choosing a file lists only folders and .zip and .img files."
 what = "Installs A/B full OTA packages and flashable zips with an install script, and flashes partition images, sparse ones included: those of boot, init_boot, vendor_boot, recovery, dtbo, vbmeta, super and the logical partitions in super, and any other named after its partition, such as modem.img. A system update installs to the other slot, which starts after a reboot. Choosing a file lists only folders and .zip and .img files."
 verify_signatures = "Verify zip signatures"
 verify_signatures_note = "When on, only zips signed with this phone's official keys install."
@@ -855,10 +855,10 @@ until_keep_cable = "Keep the cable in and don't power off until it's installed."
 until_keep_power = "Don't power off until it's installed."
 until_keep_usb_drive = "Keep the USB drive in and don't power off until it's installed."
 overwriting = "The current system is being written over, so a reboot before the install finishes starts no system."
-as_second_system = "{version}, to install as the second system"
+as_second_system = "{version}, to install as the guest system"
 room = "Room for it"
 least_room = "The least the system takes"
-room_note = "The room chosen is set aside in the data partition for the second system's files, can't be changed once it's installed, and comes back when the second system is removed. Nothing of the main system's partitions is written."
+room_note = "The room chosen is set aside in the data partition for the guest system's files, can't be changed once it's installed, and comes back when the guest system is removed. Nothing of the main system's partitions is written."
 flashable_zip = "Flashable zip"
 script_warning = "This zip runs the install script it holds, which can rewrite any partition of this phone."
 cancel_runs_nothing = "Going back cancels the install without running the script."
@@ -916,7 +916,7 @@ flashed_two = "Flashed to {partition} in slots {a} and {b}."
 # A partition the phone has once, in no slot: super.
 flashed_whole = "Flashed to {partition}."
 script_ran = "The install script ran to its end."
-second_system = "{name} is installed as the second system. Switch to it from Dual boot."
+second_system = "{name} is installed as a guest system. Switch to it from Multiboot."
 cancelled = "Cancelled"
 cant_install = "Can't install"
 failed = "Install failed"
@@ -974,6 +974,7 @@ one = "System logs and crash records, such as /data/tombstones, /data/anr, /data
 other = "System logs and crash records, such as /data/tombstones, /data/anr, /data/system/dropbox and /data/misc/logd, each user's bug reports, and this phone's own {n} log folders"
 
 [search]
+former_systems_title = "Dual boot"
 # In the search bar and the search field while nothing is typed.
 hint = "Search features and partitions"
 how = "Type the name of a feature or partition, such as backup to find Backup."
@@ -1478,25 +1479,25 @@ mono = "The terminal text is set in the monospaced Kirk Mono. Its license lets t
 # The two systems a phone can hold, and switching between them.
 [systems]
 main = "Main system"
-second = "Second system"
-second_failed = "The second system couldn't start"
+second = "Guest system"
+second_failed = "The guest system couldn't start"
 switching = "Switching systems"
 switching_to = "Switching to {name}"
 writing_boot_images = "Writing its boot images"
-removing = "Removing the second system"
+removing = "Removing the guest system"
 giving_room_back = "Giving its room back to the data partition"
 keep_power = "Don't power off until it's done."
 unreadable = "Couldn't read the systems"
 install = "Install a system"
-choose_package = "Choose the second system's package"
-what = "Tap a card to pick a system. Switching rewrites only the boot and init_boot partitions of the slot that starts next, and leaves the main system's other partitions as they are. The second system's files are kept in the data partition."
-rewritten = "Something else has written the boot partitions since Skyward put the second system's boot images there. Picking the main system and sliding to confirm writes the main system's saved boot images over what is there now; until then, nothing is installed, wiped or backed up."
-unrecorded = "The boot partitions hold a second system's boot images, and what Skyward kept of them is gone, so it can't put the main system's back. Flash the main system's boot and init_boot images again."
-changed = "The main system's vendor_boot or dtbo partition has changed since the second system was installed, so the second system may not start properly."
+choose_package = "Choose the guest system's package"
+what = "Tap a card to pick a system. Switching rewrites only the boot and init_boot partitions of the slot that starts next, and leaves the main system's other partitions as they are. The guest system's files are kept in the data partition."
+rewritten = "Something else has written the boot partitions since Skyward put the guest system's boot images there. Picking the main system and sliding to confirm writes the main system's saved boot images over what is there now; until then, nothing is installed, wiped or backed up."
+unrecorded = "The boot partitions hold a guest system's boot images, and what Skyward kept of them is gone, so it can't put the main system's back. Flash the main system's boot and init_boot images again."
+changed = "The main system's vendor_boot or dtbo partition has changed since the guest system was installed, so the guest system may not start properly."
 space_used = "Space used"
-remove = "Remove the second system"
-ask_remove = "Remove the second system and all its data? It can't be brought back."
-ask_remove_running = "The phone goes back to the main system first, then the second system and all its data are removed for good."
+remove = "Remove the guest system"
+ask_remove = "Remove the guest system and all its data? It can't be brought back."
+ask_remove_running = "The phone goes back to the main system first, then the guest system and all its data are removed for good."
 
 # The phone's own fastbootd serving the computer.
 [fastboot]

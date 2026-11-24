@@ -357,7 +357,7 @@ unverified = "この zip の署名を検証できませんでした。「zip の
 panicked = "このアップデートは現在インストールできません。システムへ再起動してから、もう一度お試しください。"
 system_asked = "システムが別のシステムのインストールを要求しましたが、このデバイスでは手動でしかインストールできません。"
 data_closed = "別のシステムは data パーティションにインストールされます。先に復号してください。"
-system_installed = "{name} はすでにインストールされています。「デュアルブート」で削除してから、もう一度お試しください。"
+system_installed = "{name} はすでにインストールされています。「マルチブート」で削除してから、もう一度お試しください。"
 no_room = "このシステムには {least} 以上が必要ですが、data パーティションの空きは {room} です。"
 
 [erase_request.refused]
@@ -572,7 +572,7 @@ language = "言語"
 time_zone = "タイムゾーン"
 license = "オープンソースライセンス"
 fonts = "UI フォント"
-dual_boot = "デュアルブート"
+dual_boot = "マルチブート"
 install = "インストール"
 backup = "バックアップ"
 restore = "復元"
@@ -683,7 +683,7 @@ ways = "インストール方法"
 choose_in_storage = "内部ストレージのパッケージまたはイメージを選択"
 choose_on_usb_drive = "USB ドライブのパッケージまたはイメージを選択"
 sideload = "パソコンで adb sideload を実行"
-what_with_second_system = "A/B フル OTA パッケージ、インストールスクリプト付きのフラッシュ用 zip、セカンドシステムのパッケージをインストールでき、パーティションイメージをフラッシュできます。sparse 形式にも対応しており、boot、init_boot、vendor_boot、recovery、dtbo、vbmeta、super と super 内の論理パーティションのイメージのほか、ファイル名がパーティション名と同じイメージ（例: modem.img）も扱えます。システムアップデートはもう一方のスロットにインストールされ、再起動後にそのスロットから起動します。セカンドシステムは data パーティションにインストールされ、「デュアルブート」で切り替えられます。ファイルの選択時には、フォルダと .zip、.img ファイルのみが表示されます。"
+what_with_second_system = "A/B フル OTA パッケージ、インストールスクリプト付きのフラッシュ用 zip、セカンドシステムのパッケージをインストールでき、パーティションイメージをフラッシュできます。sparse 形式にも対応しており、boot、init_boot、vendor_boot、recovery、dtbo、vbmeta、super と super 内の論理パーティションのイメージのほか、ファイル名がパーティション名と同じイメージ（例: modem.img）も扱えます。システムアップデートはもう一方のスロットにインストールされ、再起動後にそのスロットから起動します。セカンドシステムは data パーティションにインストールされ、「マルチブート」で切り替えられます。ファイルの選択時には、フォルダと .zip、.img ファイルのみが表示されます。"
 what = "A/B フル OTA パッケージとインストールスクリプト付きのフラッシュ用 zip をインストールでき、パーティションイメージをフラッシュできます。sparse 形式にも対応しており、boot、init_boot、vendor_boot、recovery、dtbo、vbmeta、super と super 内の論理パーティションのイメージのほか、ファイル名がパーティション名と同じイメージ（例: modem.img）も扱えます。システムアップデートはもう一方のスロットにインストールされ、再起動後にそのスロットから起動します。ファイルの選択時には、フォルダと .zip、.img ファイルのみが表示されます。"
 verify_signatures = "zip の署名を検証"
 verify_signatures_note = "オンにすると、このデバイスの公式の鍵で署名された zip のみをインストールします。"
@@ -808,7 +808,7 @@ flashed_one = "スロット {slot} の {partition} にフラッシュしまし�
 flashed_two = "スロット {a} と {b} の {partition} にフラッシュしました。"
 flashed_whole = "{partition} にフラッシュしました。"
 script_ran = "インストールスクリプトの実行が完了しました。"
-second_system = "{name} をセカンドシステムとしてインストールしました。「デュアルブート」で切り替えられます。"
+second_system = "{name} をセカンドシステムとしてインストールしました。「マルチブート」で切り替えられます。"
 cancelled = "キャンセル済み"
 cant_install = "インストールできません"
 failed = "インストール失敗"
@@ -857,6 +857,7 @@ cache = "cache パーティションをフォーマットします。recovery �
 other = "/data/tombstones、/data/anr、/data/system/dropbox、/data/misc/logd などのシステムログとクラッシュ記録、各ユーザーのバグレポート、このデバイス独自の {n} 個のログフォルダ"
 
 [search]
+former_systems_title = "デュアルブート"
 hint = "機能やパーティションを検索"
 how = "機能やパーティションの名前をローマ字で入力します。たとえば bakkuappu と入力すると「バックアップ」が見つかります。"
 none = "「{typed}」は見つかりませんでした"
@@ -1311,7 +1312,7 @@ mono = "ターミナルの文字には等幅フォントの Kirk Mono を使用�
 
 [systems]
 main = "メインシステム"
-second = "セカンドシステム"
+second = "ゲストシステム"
 second_failed = "セカンドシステムを起動できませんでした"
 switching = "システムを切り替え中"
 switching_to = "{name} に切り替え中"
@@ -1327,9 +1328,9 @@ rewritten = "Skyward がセカンドシステムのブートイメージを書�
 unrecorded = "ブートパーティションにはセカンドシステムのブートイメージがありますが、Skyward が保存していた記録が失われているため、メインシステムのブートイメージを書き戻せません。メインシステムの boot イメージと init_boot イメージをもう一度フラッシュしてください。"
 changed = "セカンドシステムのインストール後に、メインシステムの vendor_boot パーティションまたは dtbo パーティションが変更されたため、セカンドシステムが正常に起動しない可能性があります。"
 space_used = "使用容量"
-remove = "セカンドシステムを削除"
-ask_remove = "セカンドシステムとそのすべてのデータを削除しますか？元に戻せません。"
-ask_remove_running = "先にメインシステムへ戻してから、セカンドシステムとそのすべてのデータを完全に削除します。"
+remove = "このシステムを削除"
+ask_remove = "このシステムとそのすべてのデータを完全に削除しますか？"
+ask_remove_running = "メインシステムに切り替えてから、このシステムとそのすべてのデータを完全に削除します。"
 
 [fastboot]
 status = "ステータス"

@@ -12,6 +12,8 @@ use std::path::PathBuf;
 
 /// What starts every area: what it is, and which one.
 pub const HEADER: u64 = 4096;
+#[cfg(target_os = "android")]
+pub const NEW_DEVICE: &str = "skyward-area-new";
 const MAGIC: &[u8; 16] = b"SKYWARD AREA\0\0\0\x01";
 const SECTOR: u64 = 512;
 
@@ -117,6 +119,7 @@ mod sys {
     // From <linux/fs.h>, <linux/fiemap.h> and <linux/f2fs.h>, on a 64-bit
     // kernel. bionic's ioctl request is a c_int; the bits are reinterpreted.
     const FS_IOC_GETFLAGS: u32 = 0x8008_6601;
+    const FS_IOC_GETVERSION: u32 = 0x8008_7601;
     const FS_IOC_SETFLAGS: u32 = 0x4008_6602;
     const FS_IOC_FIEMAP: u32 = 0xC020_660B;
     const F2FS_IOC_SET_PIN_FILE: u32 = 0x4004_F50D;
@@ -145,6 +148,14 @@ mod sys {
         let mut flags: libc::c_int = 0;
         ioctl(f, FS_IOC_GETFLAGS, &mut flags as *mut _ as *mut libc::c_void).context("read the file's flags")?;
         Ok(flags)
+    }
+
+    /// Inode number and generation identify this file even after an unlink
+    /// lets ext4 or f2fs reuse its inode number.
+    pub fn identity(f: &File) -> Result<(u64, u32)> {
+        let mut generation: libc::c_long = 0;
+        ioctl(f, FS_IOC_GETVERSION, &mut generation as *mut _ as *mut libc::c_void).context("read the file's inode generation")?;
+        Ok((f.metadata()?.ino(), generation as u32))
     }
 
     fn set_flags(f: &File, flags: libc::c_int) -> Result<()> {
@@ -261,12 +272,18 @@ mod sys {
     /// is written at the area's start. `progress` hears how much is
     /// allocated, of `size`.
     pub fn create(path: &Path, size: u64, progress: &mut dyn FnMut(u64, u64)) -> Result<Area> {
+        create_tracked(path, size, |_| Ok(()), progress)
+    }
+
+    /// Record the exclusively created file before allocating or pinning any blocks.
+    pub fn create_tracked(path: &Path, size: u64, created: impl FnOnce(&File) -> Result<()>, progress: &mut dyn FnMut(u64, u64)) -> Result<Area> {
         let (kind, block) = filesystem(path.parent().context("an area's file is in a folder")?)?;
         ensure!(kind == F2FS_MAGIC || kind == EXT4_MAGIC, "{} is on a filesystem of kind {kind:#x}, neither f2fs nor ext4", path.display());
         let size = size.div_ceil(block) * block;
         ensure!(size > HEADER, "an area of {size} bytes holds nothing past its header");
         let mut f = OpenOptions::new().read(true).write(true).create_new(true).mode(0o600).open(path).with_context(|| format!("make {}", path.display()))?;
         let made = (|| -> Result<Area> {
+            created(&f)?;
             let first = kind == F2FS_MAGIC && pins_first(&f)?;
             if first {
                 pin(&f)?;
@@ -311,7 +328,7 @@ mod sys {
             // Written through a device of its own, as everything in the
             // area is: a kernel may keep the partition from being written
             // while the filesystem on it is mounted.
-            let node = area.map(NEW)?;
+            let node = area.map(super::NEW_DEVICE)?;
             let header = (|| -> Result<()> {
                 use std::os::unix::fs::FileExt;
                 let out = OpenOptions::new().write(true).open(&node)?;
@@ -319,7 +336,7 @@ mod sys {
                 out.sync_all()?;
                 Ok(())
             })();
-            dm::remove(NEW)?;
+            dm::remove(super::NEW_DEVICE)?;
             header.with_context(|| format!("write the header of {}", path.display()))?;
             progress(size, size);
             Ok(area)
@@ -331,21 +348,23 @@ mod sys {
         made
     }
 
-    /// The device a new area's header is written through.
-    const NEW: &str = "skyward-area-new";
-
     impl Area {
         /// Check that the area is still where it was made: its file is
         /// there, pinned and immutable, lies where it did, and the place
         /// still starts with the area's header.
         pub fn verify(&self) -> Result<()> {
-            let f = File::open(&self.file).with_context(|| format!("open {}", self.file.display()))?;
+            self.verified_file().map(drop)
+        }
+
+        pub fn verified_file(&self) -> Result<File> {
+            let f = OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(&self.file).with_context(|| format!("open {}", self.file.display()))?;
             let flags = flags(&f)?;
             ensure!(flags & FS_IMMUTABLE_FL != 0, "{} can be deleted", self.file.display());
             let (kind, _) = filesystem(&self.file)?;
             ensure!(kind != F2FS_MAGIC || pinned(&f)?, "{} is no longer pinned", self.file.display());
             ensure!(extents(&f)? == self.extents, "{} has moved", self.file.display());
-            self.check_header()
+            self.check_header()?;
+            Ok(f)
         }
 
         /// Check, through the partition, that the place starts with the
@@ -370,19 +389,33 @@ mod sys {
         /// Let the file go: no longer immutable, then deleted, and its
         /// blocks are the filesystem's again.
         pub fn remove(&self) -> Result<()> {
-            let f = match File::open(&self.file) {
-                Ok(f) => f,
-                Err(e) if e.kind() == ErrorKind::NotFound => return Ok(()),
-                Err(e) => return Err(e).with_context(|| format!("open {}", self.file.display())),
-            };
-            set_flags(&f, flags(&f)? & !FS_IMMUTABLE_FL)?;
-            fs::remove_file(&self.file).with_context(|| format!("delete {}", self.file.display()))
+            unlink(&self.file, None)
         }
+    }
+
+    /// Release a file left by an interrupted operation, if its inode is still there.
+    pub fn remove_tracked(path: &Path, inode: u64, generation: u32) -> Result<()> {
+        unlink(path, Some((inode, generation)))
+    }
+
+    fn unlink(path: &Path, expected: Option<(u64, u32)>) -> Result<()> {
+        let f = match OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == ErrorKind::NotFound || expected.is_some() && e.raw_os_error() == Some(libc::ELOOP) => return Ok(()),
+            Err(e) => return Err(e).with_context(|| format!("open {}", path.display())),
+        };
+        let stat = f.metadata()?;
+        if let Some(expected) = expected && (expected.0 != stat.ino() || !stat.is_file() || expected != identity(&f)?) {
+            return Ok(());
+        }
+        ensure!(stat.is_file(), "{} is not a regular file", path.display());
+        set_flags(&f, flags(&f)? & !FS_IMMUTABLE_FL)?;
+        fs::remove_file(path).with_context(|| format!("delete {}", path.display()))
     }
 }
 
 #[cfg(target_os = "android")]
-pub use sys::create;
+pub use sys::{create, create_tracked, identity, remove_tracked};
 
 #[cfg(test)]
 mod tests {

@@ -76,9 +76,7 @@ pub fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Contents> {
 }
 
 fn check(m: &Manifest) -> Result<()> {
-    let id_char = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit() || ".-_".contains(c);
-    ensure!(!m.id.is_empty() && m.id.len() <= 32 && m.id.chars().all(id_char), "the system's id {:?} is not 1 to 32 of a-z, 0-9 and .-_", m.id);
-    ensure!(m.id != "installed", "the system's id names the installed system");
+    crate::SystemId::new(&m.id)?;
     ensure!(!m.name.trim().is_empty() && m.name.chars().count() <= 32, "the system's name {:?} is not 1 to 32 characters", m.name);
     ensure!(m.version.chars().count() <= 32, "the system's version {:?} is longer than 32 characters", m.version);
     ensure!(!m.filesystem.is_empty() && m.filesystem.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()), "the filesystem {:?} is no kernel's name of one", m.filesystem);

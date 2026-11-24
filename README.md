@@ -14,14 +14,12 @@ Skyward is a recovery written in Rust, from scratch.
 
 ## Features
 
-### Dual boot
-
-![One phone holds two systems](slides/en/out/01-dual-boot.png)
+### Multi-boot
 
 ![A switch rewrites only two partitions](slides/en/out/02-dual-boot-partitions.png)
 
-How a second system is packaged and started is in
-[How dual boot works](#how-dual-boot-works).
+Install several guest systems beside the main system and choose which one starts
+next. See [How multi-boot works](#how-multi-boot-works) for the package format.
 
 ### Decryption
 
@@ -141,7 +139,7 @@ not been verified.
 ## Installing Skyward
 
 Skyward needs an unlocked bootloader. Download the zip for your phone from
-[Releases](https://github.com/kirklin/skyward/releases), where each shows as the
+[Releases](https://github.com/CiBeDerORG/skyward/releases), where each shows as the
 phone's model and codename, such as Xiaomi 17 Ultra (nezha). Check it against
 `SHA256SUMS`, unzip it, and flash the image inside to the recovery partition of
 the slot the phone runs from, with the phone in fastboot mode:
@@ -160,18 +158,23 @@ over the recovery partitions gets Skyward back in them.
 adb in Skyward is a root shell that needs no authorization on the phone: anyone
 with the phone and a cable can reach its storage while it is in recovery.
 
-## How dual boot works
+## How multi-boot works
 
-Skyward installs a second system beside the one in the phone's own partitions,
-whether that is HyperOS or a custom ROM, and switches between them from **Dual boot**
-on its home page. The second system's root is a file in the data partition that the
-filesystem may neither move nor delete, read and written through the partition
-itself; the boot images of both systems are kept in another such file. A switch
-writes only the boot and init_boot partitions of the slot that starts next, and
-keeps each step on /metadata first, so a switch cut off by a loss of power is
-finished when Skyward next starts. vendor_boot, dtbo, recovery, vbmeta, the firmware
-and super stay as they are, and the second system starts with the installed
-system's vendor_boot and dtbo.
+Open **Install** for each compatible guest package. Give each package a distinct
+`id` in `system.toml`. The list on the home page lets you select the main
+system or any installed guest, confirm the next boot, and remove an individual
+guest. Each guest has its own root filesystem and boot images. The roots and
+boot images are kept in fixed areas of the data partition. All guests share the
+main system's vendor_boot and dtbo, so their kernels must work with those images.
+
+Existing dual-boot installations are read automatically. Once the new recovery
+saves multi-boot metadata, use this fork to manage the guests. To return to a
+dual-boot-only release, first switch to the main system and remove every guest
+with this recovery.
+
+A switch writes the boot and init_boot partitions of the target slot. Skyward
+records each step on /metadata so it can finish an interrupted switch the next
+time recovery starts.
 
 Before anything else writes the boot partitions, Skyward puts the installed system's
 boot images back: an install, a slot switch, fastboot, a factory reset, and a backup
@@ -196,7 +199,7 @@ of the installed system ends in the recovery: it leaves the reason in misc, unpa
 the ramdisk of the slot's recovery partition over its own, as the kernel unpacks it
 when the bootloader starts the recovery, and hands over to Skyward's first program,
 so Skyward comes up however the bootloader treats a restart. Skyward shows why, and
-the second system still starts next until the user switches on Dual boot. A start
+the selected guest still starts next until the user chooses another system. A start
 that stops moving restarts into the recovery instead, and a phone restarted before
 the hand-over finds the same request in misc at its next start, which brings
 Skyward up before anything else. Where Skyward comes up neither way, the phone stays
@@ -207,7 +210,7 @@ its init_boot image with the program of the Skyward that switches, so an updated
 Skyward starts it with the new program.
 
 A running system switches by writing `boot-recovery` with
-`--switch_system=installed`, or `--switch_system=` and the second system's `id`, to
+`--switch_system=installed`, or `--switch_system=` and the chosen guest's `id`, to
 misc, and restarting into recovery. Where the bootloader starts the slot again, as
 the 13 Ultra's can with a USB cable in, Skyward's program finds the request in misc
 at the next start and brings Skyward up before anything else.

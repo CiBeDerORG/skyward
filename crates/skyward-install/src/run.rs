@@ -468,8 +468,9 @@ fn install_system(ctx: &Context, contents: &skyward_systems::package::Contents) 
     if !skyward_block::mount::is_mount_point(Path::new(DATA))? {
         return refused(Refusal::DataClosed);
     }
-    if let Some(other) = skyward_systems::install::state()?.system {
-        return refused(Refusal::SystemInstalled(other.name));
+    let id = skyward_systems::SystemId::new(&contents.manifest.id)?;
+    if let Some(other) = skyward_systems::install::state()?.guest(id) {
+        return refused(Refusal::SystemInstalled(other.name.clone()));
     }
     let slot = skyward_vab::current_slot()?.context("not an A/B phone")?;
     let room = skyward_systems::install::room_now(slot)?;

@@ -1,10 +1,7 @@
-//! The second system's work for the pages, on a thread of its own so the
-//! screen goes on while the boot partitions are written: the systems read,
-//! a switch between them, and the second system removed, one task after
-//! another, each ending with the systems read again.
+//! Read, switch and remove systems on a worker so the screen remains responsive.
 
 use anyhow::{Context, Result};
-use skyward_systems::{install, Overview, State, Who};
+use skyward_systems::{install, Held, Overview, SystemId, Who};
 use skyward_vab::Slot;
 use std::os::fd::RawFd;
 use std::sync::mpsc::{self, Sender};
@@ -19,8 +16,8 @@ pub enum Task {
     /// Have the system a request in misc names start next: the installed
     /// one by a word, the second by its id.
     SwitchNamed(String),
-    /// Remove the second system.
-    Remove,
+    /// Remove the guest selected on the systems page.
+    Remove(SystemId),
 }
 
 pub enum Event {
@@ -53,28 +50,17 @@ pub fn next_slot() -> Result<Slot> {
 fn read(version_prop: &str) -> Result<Overview> {
     let current = skyward_vab::current_slot()?.context("not an A/B phone")?;
     let props = skyward_info::installed_props(current)?;
-    let state = install::state()?;
-    let changed = match state.system {
-        Some(_) => install::changed(&state, next_slot()?)?,
-        None => false,
-    };
+    let state = install::state_for_display()?;
+    let changed = if state.systems.is_empty() { Vec::new() } else { install::changed(&state, next_slot()?)? };
     let held = install::held(&state, current)?;
-    Ok(install::overview(&state, skyward_systems::installed_name(&props, version_prop), changed, held))
-}
-
-/// The system whose boot set is in the boot partitions.
-fn starting(state: &State) -> Who {
-    match state.occupied {
-        Some(_) => Who::Other,
-        None => Who::Installed,
-    }
+    Ok(install::overview(&state, skyward_systems::installed_name(&props, version_prop), &changed, held))
 }
 
 /// Finish a switch cut off before, where there was one, and say which
 /// system starts next then.
 fn resume() -> Result<Option<Who>> {
     Ok(match install::resume()? {
-        true => Some(starting(&install::state()?)),
+        true => Some(install::state()?.starting()),
         false => None,
     })
 }
@@ -83,10 +69,14 @@ fn resume() -> Result<Option<Who>> {
 /// system that starts already is left as it is.
 fn switch(to: Who) -> Result<()> {
     install::resume()?;
-    if starting(&install::state()?) == to {
+    let state = install::state()?;
+    let next = next_slot()?;
+    if state.starting() == to {
+        anyhow::ensure!(install::held(&state, next)? == Held::Recorded, "the boot partitions no longer match the selected system");
+        anyhow::ensure!(state.occupied.as_deref().is_none_or(|s| s == next.suffix()), "the guest occupies a different slot from the next boot slot");
         return Ok(());
     }
-    install::switch_to(next_slot()?, to)
+    install::switch_to(next, to)
 }
 
 /// What a switch tells: the system it went to, or why it did not go.
@@ -127,7 +117,7 @@ impl Worker {
                     },
                     Task::Switch(to) => Some(switched(switch(to).map(|()| to))),
                     Task::SwitchNamed(name) => Some(switched(named(&name).and_then(|to| switch(to).map(|()| to)))),
-                    Task::Remove => install::remove().err().map(|e| Event::Failed(format!("{e:#}"))),
+                    Task::Remove(id) => install::remove(id).err().map(|e| Event::Failed(format!("{e:#}"))),
                 };
                 if let Some(event) = told {
                     tell.tell(event);

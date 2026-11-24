@@ -106,12 +106,15 @@ fn phone_filesystems(open: bool) -> Vec<FsRow> {
 
 /// The systems of a 17 Ultra with a second system installed, HyperOS
 /// starting.
+fn ubuntu() -> skyward_systems::SystemId {
+    skyward_systems::SystemId::new("ubuntu-touch").unwrap()
+}
+
 fn two_systems() -> Overview {
     Overview {
         installed: Named { name: "HyperOS 3".into(), version: Some("OS3.0.308.0.WMACNXM".into()) },
-        other: Some(Other { id: "ubuntu-touch".into(), name: "Ubuntu Touch".into(), version: "24.04-1.x".into(), size: 32_000_000_000 }),
-        other_starts: false,
-        changed: false,
+        others: vec![Other { id: ubuntu(), name: "Ubuntu Touch".into(), version: "24.04-1.x".into(), size: 32_000_000_000, changed: false }],
+        starting: Who::Installed,
         held: skyward_systems::Held::Recorded,
     }
 }
@@ -437,7 +440,7 @@ fn main() -> Result<()> {
     let adding = |app: &mut App, name: &str, security: Security, field: Field, choosing: bool| {
         app.state.adding = Some(Adding { name: name.into(), security, field, choosing });
     };
-    let pages: [PageShot; 185] = [
+    let pages: [PageShot; 186] = [
         ("11-install-light-locked", Screen::Install, false, &|app| {
             app.state.data = Data::Locked { user: 0, keys: Keys::Digits, checking: false };
         }),
@@ -935,26 +938,37 @@ fn main() -> Result<()> {
         ("202-systems-light", Screen::Systems, false, &|app| app.set_systems(Ok(two_systems()))),
         ("202-systems-light-picked", Screen::Systems, false, &|app| {
             app.set_systems(Ok(two_systems()));
-            app.state.system_pick = Some(Who::Other);
+            app.state.system_pick = Some(Who::Guest(ubuntu()));
+        }),
+        ("202-systems-multiple", Screen::Systems, false, &|app| {
+            let mut systems = two_systems();
+            let id = skyward_systems::SystemId::new("debian").unwrap();
+            systems.others.push(Other { id, name: "Debian".into(), version: "13".into(), size: 16_000_000_000, changed: false });
+            systems.starting = Who::Guest(ubuntu());
+            app.set_systems(Ok(systems));
+            app.state.system_pick = Some(Who::Guest(id));
         }),
         ("202-systems-dark", Screen::Systems, true, &|app| app.set_systems(Ok(two_systems()))),
         ("202-systems-dark-second-starts", Screen::Systems, true, &|app| {
-            app.set_systems(Ok(Overview { other_starts: true, changed: true, ..two_systems() }));
-            app.state.asking_delete = true;
+            let mut systems = two_systems();
+            systems.starting = Who::Guest(ubuntu());
+            systems.others[0].changed = true;
+            app.set_systems(Ok(systems));
+            app.state.remove_system = Some(ubuntu());
         }),
-        ("202-systems-light-empty", Screen::Systems, false, &|app| app.set_systems(Ok(Overview { other: None, ..two_systems() }))),
+        ("202-systems-light-empty", Screen::Systems, false, &|app| app.set_systems(Ok(Overview { others: Vec::new(), ..two_systems() }))),
         ("202-systems-dark-switching", Screen::Systems, true, &|app| {
             app.set_systems(Ok(two_systems()));
-            app.state.systems_work = Some(SystemsWork::Switching(Who::Other));
+            app.state.systems_work = Some(SystemsWork::Switching(Who::Guest(ubuntu())));
         }),
         ("202-systems-light-stopped", Screen::Systems, false, &|app| {
-            app.set_systems(Ok(Overview { other_starts: true, ..two_systems() }));
+            app.set_systems(Ok(Overview { starting: Who::Guest(ubuntu()), ..two_systems() }));
             app.state.system_notice = Some("the root holds no program /sbin/init to start".into());
             app.state.data = Data::Closed;
         }),
         ("203-home-light-systems", Screen::Home, false, &|app| {
             app.state.dual_boot = true;
-            app.set_systems(Ok(Overview { other_starts: true, ..two_systems() }));
+            app.set_systems(Ok(Overview { starting: Who::Guest(ubuntu()), ..two_systems() }));
             app.state.system_notice = Some("the root holds no program /sbin/init to start".into());
         }),
         ("70-erase-light", Screen::Erase, false, &|app| {

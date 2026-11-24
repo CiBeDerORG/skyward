@@ -142,7 +142,7 @@ impl App {
             Action::PickSystem(who) => {
                 if self.state.systems_work.is_none() {
                     self.state.system_pick = Some(who);
-                    self.state.asking_delete = false;
+                    self.state.remove_system = None;
                     self.state.confirm = 0.0;
                     self.refresh();
                 }
@@ -197,6 +197,11 @@ impl App {
             Action::ModeBit(bit) => {
                 let mode = self.state.file.as_ref().expect("the permissions page shows an entry").mode;
                 return vec![Effect::SetMode { path: self.entry_path(), mode: (mode ^ bit) & 0o7777 }];
+            }
+            Action::AskRemoveSystem(id) => {
+                self.state.remove_system = Some(id);
+                self.state.confirm = 0.0;
+                self.refresh();
             }
             Action::AskDelete => {
                 self.state.asking_delete = true;
@@ -814,22 +819,31 @@ impl App {
                     self.refresh();
                 }
             }
-            Confirm::SwitchSystem => {
-                if let (Some(Ok(systems)), Some(pick)) = (&self.state.systems, self.state.system_pick)
-                    && pick != starting(systems)
+            Confirm::SwitchSystem(to) => {
+                if let Some(Ok(systems)) = &self.state.systems
+                    && self.state.systems_work.is_none() && self.state.remove_system.is_none()
+                    && self.state.system_pick == Some(to) && can_switch(systems, to)
                 {
-                    fx.push(Effect::SwitchSystem(pick));
-                    self.state.systems_work = Some(SystemsWork::Switching(pick));
+                    fx.push(Effect::SwitchSystem(to));
+                    self.state.systems_work = Some(SystemsWork::Switching(to));
                     self.state.system_pick = None;
                     self.refresh();
                 }
             }
-            Confirm::RemoveSystem => {
-                fx.push(Effect::RemoveSystem);
-                self.state.systems_work = Some(SystemsWork::Removing);
-                self.state.asking_delete = false;
-                self.state.system_pick = None;
-                self.refresh();
+            Confirm::RemoveSystem(id) => {
+                if let Some(Ok(systems)) = &self.state.systems
+                    && self.state.systems_work.is_none() && self.state.remove_system == Some(id)
+                    && self.state.system_pick.unwrap_or(systems.starting) == Who::Guest(id)
+                    && guest(systems, Who::Guest(id)).is_some()
+                    && (systems.starting != Who::Guest(id) || systems.held == skyward_systems::Held::Recorded)
+                    && matches!(self.state.data, Data::Open | Data::Locked { .. })
+                {
+                    fx.push(Effect::RemoveSystem(id));
+                    self.state.systems_work = Some(SystemsWork::Removing);
+                    self.state.remove_system = None;
+                    self.state.system_pick = None;
+                    self.refresh();
+                }
             }
             Confirm::InstallSystem => {
                 if let Install::SystemChoosing(choice) = &self.state.install {

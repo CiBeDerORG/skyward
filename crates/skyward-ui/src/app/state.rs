@@ -105,6 +105,8 @@ pub struct State {
     /// The system picked on the systems page to start next; with none
     /// picked, the page shows the one that starts.
     pub system_pick: Option<Who>,
+    /// The guest whose removal the user has been asked to confirm.
+    pub remove_system: Option<SystemId>,
     /// Work on the systems under way.
     pub systems_work: Option<SystemsWork>,
     /// Why the second system's start stopped, as its first program told
@@ -241,6 +243,7 @@ impl Default for State {
             dual_boot: false,
             systems: None,
             system_pick: None,
+            remove_system: None,
             systems_work: None,
             system_notice: None,
             data: Data::Closed,

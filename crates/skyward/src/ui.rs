@@ -33,7 +33,7 @@ use skyward_net::release::{Installed, Release, Unanswered};
 use skyward_net::wlan::{Power as WlanPower, Stage as Joining, Wlan};
 use skyward_sys::sleep::{Sleeper, Slept};
 use skyward_sys::uevent;
-use skyward_systems::Who;
+use skyward_systems::{SystemId, Who};
 use skyward_ui::app::{
     App, Asked, BackupAt, BackupEnd, BackupEntry, BackupRefusal, ClashChoice, Data, DownloadEnd, Effect, EraseStop, FileKind, FileOp,
     FileRow, FileTask, FsAction, FsRow, Have, Held, ItemEnd, ItemState, JobEnd, Keys, MountFailure, Part, PartKind, PartStop, Place,
@@ -1512,11 +1512,14 @@ impl<'a> Pages<'a> {
                 self.app.part_work_started(PartKind::Unshare, true);
                 self.part_worker = Some(partwork::Worker::start(partwork::Task::Unshare { slot })?);
             }
-            // The installed system is asked for by a word, and the second by
-            // its id.
+            // Requests use "installed" for the main system or a guest's package ID.
             Work::SwitchSystem { to } => match self.systems_worker.as_mut() {
                 Some(worker) => {
-                    self.app.switch_asked(if to == "installed" { Who::Installed } else { Who::Other });
+                    if to == "installed" {
+                        self.app.switch_asked(Who::Installed);
+                    } else if let Ok(id) = SystemId::new(to) {
+                        self.app.switch_asked(Who::Guest(id));
+                    }
                     worker.send(systems::Task::SwitchNamed(to.clone()));
                     self.switch_asked = true;
                 }
@@ -2574,12 +2577,12 @@ impl Pages<'_> {
                     self.systems()?.send(systems::Task::Switch(to));
                 }
             }
-            Effect::RemoveSystem => {
+            Effect::RemoveSystem(id) => {
                 if self.installer.is_some() {
                     self.app.systems_work_failed(self.app.state.lang.pick(INSTALL_UNFINISHED), now);
                 } else {
-                    skyward_sys::kmsg("removing the second system, as the systems page asked")?;
-                    self.systems()?.send(systems::Task::Remove);
+                    skyward_sys::kmsg(&format!("removing system {}, as the systems page asked", id.as_str()))?;
+                    self.systems()?.send(systems::Task::Remove(id));
                 }
             }
             Effect::InstallSystem { size } => self.installer.as_ref().context("no installer holds a system")?.install_system(size),

@@ -1,8 +1,6 @@
-//! A second system beside the one installed: its root in a fixed area of
-//! the data partition, and the boot sets of both, the kernel and ramdisk
-//! the bootloader starts, kept in a store area of their own. Switching
-//! writes one or the other into the boot and init_boot partitions of the
-//! slot that starts next; nothing else of the phone changes.
+//! Guest systems alongside the installed system. Each guest has a fixed
+//! root area in the data partition and a saved kernel and ramdisk. Switching
+//! writes the selected boot set into the slot's boot and init_boot partitions.
 
 use std::collections::HashMap;
 
@@ -13,7 +11,7 @@ pub mod state;
 pub mod store;
 pub mod switch;
 
-pub use state::{State, Who};
+pub use state::{State, SystemId, Who};
 pub use switch::Held;
 
 /// What the pages show of the systems.
@@ -22,14 +20,9 @@ pub struct Overview {
     /// The system installed in the phone's own partitions, as it names
     /// itself.
     pub installed: Named,
-    pub other: Option<Other>,
-    /// The other system's boot set is in the boot partitions, so it is the
-    /// one that starts.
-    pub other_starts: bool,
-    /// The installed system's kernel side has changed since the other
-    /// system was installed: its vendor_boot or its dtbo, which the other
-    /// system starts with too.
-    pub changed: bool,
+    pub others: Vec<Other>,
+    /// The system whose boot images are currently in the partitions.
+    pub starting: Who,
     /// What the boot partitions hold, set against what is kept of them.
     pub held: Held,
 }
@@ -42,11 +35,13 @@ pub struct Named {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Other {
-    pub id: String,
+    pub id: SystemId,
     pub name: String,
     pub version: String,
     /// The bytes its root takes in the data partition.
     pub size: u64,
+    /// The vendor_boot or dtbo this guest uses changed since installation.
+    pub changed: bool,
 }
 
 /// What the installed system calls itself, by its properties: HyperOS by

@@ -30,7 +30,7 @@ use skyward_net::github::{Build, Newest};
 use skyward_net::release::{Release, Unanswered};
 use skyward_net::supplicant::Security;
 use skyward_net::wlan::{Joined, Network, Power, Stage as Joining, Traffic, Wlan};
-use skyward_systems::{Overview, Who};
+use skyward_systems::{Overview, SystemId, Who};
 use skyward_vab::{BootSlots, Hold, Slot, SnapshotState, Standing};
 
 mod act;
@@ -222,9 +222,9 @@ pub enum Confirm {
     Filesystem,
     /// Switch to the system picked on the systems page, and restart into
     /// it.
-    SwitchSystem,
+    SwitchSystem(Who),
     /// Take the other system away.
-    RemoveSystem,
+    RemoveSystem(SystemId),
     /// Install the system the installer holds with the room chosen.
     InstallSystem,
 }
@@ -338,6 +338,8 @@ pub enum Action {
     /// Ask to delete the entry the file page shows, or the backup the
     /// restore page shows; a swipe then confirms.
     AskDelete,
+    /// Ask to remove this guest and its data.
+    AskRemoveSystem(SystemId),
     /// How to go on when a name is taken where an entry goes.
     Resolve(ClashChoice),
     /// Stop giving the data partition's files their labels.
@@ -464,7 +466,7 @@ pub enum Effect {
     SwitchSystem(Who),
     /// Take the other system away, telling how it went with
     /// [`App::set_systems`] or [`App::systems_work_failed`].
-    RemoveSystem,
+    RemoveSystem(SystemId),
     /// Install the system the installer holds with a root of `size` bytes.
     InstallSystem { size: u64 },
     /// Mount the slot's partition with this base name, such as `system`.

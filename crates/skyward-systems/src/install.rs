@@ -1,14 +1,16 @@
-//! Installing the other system from its package, switching between the
-//! systems on the phone, and taking the other system away again.
+//! Installing guests from packages, choosing the next system to start,
+//! and removing individual guests.
 
 use crate::state::{State, Store};
-use crate::{Held, Named, Other, Overview};
+use crate::{Held, Named, Other, Overview, SystemId};
 use skyward_block::area::HEADER;
 
 /// Where the areas' files are, in the data partition.
 pub const FOLDER: &str = "/data/skyward/systems";
 /// The devices the store and a root are laid out as while they are written.
 pub const STORE_DEVICE: &str = "skyward-store";
+#[cfg(target_os = "android")]
+const GUEST_STORE_DEVICE: &str = "skyward-guest-store";
 pub const ROOT_DEVICE: &str = "skyward-root";
 /// The gigabyte the pages count sizes in.
 const GB: u64 = 1_000_000_000;
@@ -31,7 +33,7 @@ pub enum Step {
 /// which the installed system's updates keep for themselves, as Android
 /// keeps it from its dynamic systems.
 pub fn room(free: u64, store: u64, super_size: u64) -> u64 {
-    free.saturating_sub(store + super_size + HEADER)
+    free.saturating_sub(store).saturating_sub(super_size).saturating_sub(HEADER)
 }
 
 /// The sizes offered for a root that takes at least `least` bytes, with
@@ -40,32 +42,81 @@ pub fn room(free: u64, store: u64, super_size: u64) -> u64 {
 /// is rounded up to its filesystem's blocks.
 pub fn sizes(least: u64, room: u64) -> Vec<u64> {
     let first = least.div_ceil(GB).max(1);
-    std::iter::once(first).chain(OFFERED.into_iter().filter(|&s| s > first)).map(|s| s * GB).filter(|&s| s <= room).collect()
+    std::iter::once(first).chain(OFFERED.into_iter().filter(|&s| s > first)).filter_map(|s| s.checked_mul(GB)).filter(|&s| s <= room).collect()
 }
 
 /// What the pages show of the systems, from the state and the installed
 /// system's name; `changed` says whether its vendor_boot or dtbo differ
 /// from when the other system was installed, and `held` what the boot
 /// partitions hold.
-pub fn overview(state: &State, installed: Named, changed: bool, held: Held) -> Overview {
+pub fn overview(state: &State, installed: Named, changed: &[bool], held: Held) -> Overview {
+    assert_eq!(state.systems.len(), changed.len(), "compatibility is checked for each guest");
     Overview {
         installed,
-        other: state.system.as_ref().map(|s| Other { id: s.id.clone(), name: s.name.clone(), version: s.version.clone(), size: s.root.size - HEADER }),
-        other_starts: state.occupied.is_some(),
-        changed,
+        others: state.systems.iter().zip(changed).map(|(s, &changed)| Other {
+            id: SystemId::new(&s.id).expect("validated system id"),
+            name: s.name.clone(),
+            version: s.version.clone(),
+            size: s.root.size - HEADER,
+            changed,
+        }).collect(),
+        starting: state.starting(),
         held,
     }
 }
 
 impl Store {
-    /// A store's bytes for the phone's partitions, where the store is not
-    /// made yet; none where it is.
+    /// The next install needs the shared store, a dedicated guest store,
+    /// or no extra storage when the shared guest entry is free.
     pub fn needed(state: &State, boot: u64, init_boot: u64) -> u64 {
-        match state.store {
-            Some(_) => 0,
-            None => Store::size_for(boot, init_boot),
+        if state.store.is_none() {
+            Store::size_for(boot, init_boot)
+        } else if state.systems.iter().any(|s| s.boot_store.is_none()) {
+            Store::guest_size(boot, init_boot)
+        } else {
+            0
         }
     }
+}
+
+#[cfg(any(target_os = "android", test))]
+fn is_registered(state: &State, file: &std::path::Path) -> bool {
+    state.areas().any(|area| area.file == file)
+}
+
+/// Both the legacy layout and current allocations live directly in FOLDER.
+#[cfg(any(target_os = "android", test))]
+fn managed_path(path: &std::path::Path) -> bool {
+    if path.parent() != Some(std::path::Path::new(FOLDER)) {
+        return false;
+    }
+    let Some(name) = path.file_name().and_then(|s| s.to_str()) else { return false };
+    if name == "store" || name.strip_suffix(".img").is_some_and(|id| SystemId::new(id).is_ok()) {
+        return true;
+    }
+    let nonce = name.strip_prefix("guest-").and_then(|s| s.strip_suffix(".img").or_else(|| s.strip_suffix(".boot")))
+        .or_else(|| name.strip_prefix("main-").and_then(|s| s.strip_suffix(".boot")));
+    nonce.is_some_and(|s| s.len() == 32 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+/// Detach a guest from the registry and return just the areas it releases.
+/// The caller commits the registry and its cleanup journal before unlinking.
+#[cfg(any(target_os = "android", test))]
+fn detach(state: &mut State, id: SystemId) -> anyhow::Result<Vec<skyward_block::area::Area>> {
+    use anyhow::{ensure, Context};
+    ensure!(state.switching.is_none() && state.active != Some(id), "the guest is still in use");
+    let Some(index) = state.systems.iter().position(|s| s.id == id.as_str()) else { return Ok(Vec::new()) };
+    let guest = state.systems.remove(index);
+    let mut areas = vec![guest.root];
+    if let Some(store) = guest.boot_store {
+        areas.push(store.area);
+    }
+    if state.systems.is_empty() {
+        ensure!(state.occupied.is_none(), "a guest still occupies a boot slot");
+        areas.push(state.store.take().context("the shared boot store is missing")?.area);
+        state.saved = None;
+    }
+    Ok(areas)
 }
 
 #[cfg(target_os = "android")]
@@ -77,7 +128,7 @@ mod sys {
     use crate::boot::{self, Start};
     use crate::package::{Contents, BOOT, INIT_BOOT, ROOT};
     use anyhow::Result;
-    use crate::state::{System, Who, PATH};
+    use crate::state::{PendingFile, System, Who, PATH};
     use crate::store::{self, OTHER};
     use crate::switch::{self, Places};
     use anyhow::{ensure, Context};
@@ -86,7 +137,8 @@ mod sys {
     use skyward_block::{dm, BY_NAME};
     use skyward_vab::Slot;
     use std::fs::{self, File, OpenOptions};
-    use std::io::{Read, Seek, SeekFrom, Write};
+    use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
+    use std::os::unix::fs::DirBuilderExt;
     use std::path::{Path, PathBuf};
     use zip::ZipArchive;
 
@@ -110,29 +162,45 @@ mod sys {
 
     /// The room for a root, in the data partition as it is now.
     pub fn room_now(slot: Slot) -> Result<u64> {
-        let state = state()?;
+        let _lock = lock()?;
+        let mut state = state()?;
+        if !state.pending_files.is_empty() {
+            writable(|| cleanup(&mut state))?;
+        }
+        room_for(&state, slot)
+    }
+
+    fn room_for(state: &State, slot: Slot) -> Result<u64> {
         let size = |name: &str| skyward_block::size_bytes(store::partition(by_name(), name, slot));
-        let needed = Store::needed(&state, size(store::BOOT)?, size(store::INIT_BOOT)?);
+        let needed = Store::needed(state, size(store::BOOT)?, size(store::INIT_BOOT)?);
         Ok(room(free()?, needed, skyward_block::size_bytes(by_name().join("super"))?))
     }
 
     /// Lay the store out as a device, once it is found where it was, run
     /// `work` on it, and take the device away again.
-    fn with_store<T>(state: &State, work: impl FnOnce(&Path) -> Result<T>) -> Result<T> {
-        let store = state.store.as_ref().context("no store holds the boot sets")?;
+    fn with_store<T>(store: &Store, name: &str, work: impl FnOnce(&Path) -> Result<T>) -> Result<T> {
         store.area.check_header()?;
-        if dm::status(STORE_DEVICE)?.is_some() {
-            dm::remove(STORE_DEVICE)?;
+        if dm::status(name)?.is_some() {
+            dm::remove(name)?;
         }
-        let node = store.area.map(STORE_DEVICE)?;
+        let node = store.area.map(name)?;
         let done = work(&node);
-        let gone = dm::remove(STORE_DEVICE);
+        let gone = dm::remove(name);
         let done = done?;
         gone?;
         Ok(done)
     }
 
     const METADATA: &str = "/metadata";
+
+    /// All registry readers that subsequently mutate state hold the same
+    /// directory lock, including across recovery workers or processes.
+    fn lock() -> Result<File> {
+        metadata()?;
+        let dir = File::open(METADATA)?;
+        dir.lock().context("lock the systems registry")?;
+        Ok(dir)
+    }
 
     /// Mount /metadata, where the state is kept, read-only where it is not
     /// mounted yet, as the recovery keeps it.
@@ -162,6 +230,19 @@ mod sys {
         State::load(Path::new(PATH))
     }
 
+    /// The registry for the recovery page. Once data is open, also reclaim
+    /// files left by interrupted installs and removals before showing free space.
+    pub fn state_for_display() -> Result<State> {
+        let snapshot = state()?;
+        if snapshot.pending_files.is_empty() || !skyward_block::mount::is_mount_point(data())? {
+            return Ok(snapshot);
+        }
+        let _lock = lock()?;
+        let mut current = state()?;
+        writable(|| cleanup(&mut current))?;
+        Ok(current)
+    }
+
     /// The program the other system starts with: this recovery's own.
     fn program() -> PathBuf {
         Path::new("/").join(skyward_config::ramdisk::SYSTEM_INIT)
@@ -172,25 +253,47 @@ mod sys {
     /// waits for any update to be merged, and first checks that the other
     /// system's root is still where it was put.
     pub fn switch_to(next: Slot, to: Who) -> Result<()> {
+        let _lock = lock()?;
+        switch_now(next, to)
+    }
+
+    fn switch_now(next: Slot, to: Who) -> Result<()> {
         let state = state()?;
-        if to == Who::Other {
+        if let Who::Guest(id) = to {
             let update = skyward_vab::snapshot_state()?;
             ensure!(update == skyward_vab::SnapshotState::None, "an update is in flight ({update:?}), and the installed system has to start once more to merge it");
-            state.system.as_ref().context("no other system is installed")?.root.check_header()?;
+            state.guest(id).context("the selected guest is not installed")?.root.check_header()?;
         }
-        let (path, program) = (Path::new(PATH), program());
-        writable(|| with_store(&state, |device| switch::switch(&Places { state: path, by_name: by_name(), store: device, program: &program }, next, to)))
+        writable(|| with_places(&state, to, |places| switch::switch(places, next, to)))
+    }
+
+    fn with_places<T>(state: &State, to: Who, work: impl FnOnce(&Places) -> Result<T>) -> Result<T> {
+        let shared = state.store.as_ref().context("no store holds the boot sets")?;
+        let guest_store = match to {
+            Who::Installed => None,
+            Who::Guest(id) => state.guest(id).context("the selected guest is not installed")?.boot_store.as_ref(),
+        };
+        let program = program();
+        with_store(shared, STORE_DEVICE, |store| {
+            let run = |guest_store: Option<&Path>| work(&Places { state: Path::new(PATH), by_name: by_name(), store, guest_store, program: &program });
+            match guest_store {
+                Some(guest) => with_store(guest, GUEST_STORE_DEVICE, |node| run(Some(node))),
+                None => run(None),
+            }
+        })
     }
 
     /// Finish a switch cut off before, where one was; says whether there
     /// was one.
     pub fn resume() -> Result<bool> {
+        let _lock = lock()?;
+        resume_now()
+    }
+
+    fn resume_now() -> Result<bool> {
         let state = state()?;
-        if state.switching.is_none() {
-            return Ok(false);
-        }
-        let (path, program) = (Path::new(PATH), program());
-        writable(|| with_store(&state, |device| switch::resume(&Places { state: path, by_name: by_name(), store: device, program: &program })))
+        let Some(pending) = &state.switching else { return Ok(false) };
+        writable(|| with_places(&state, pending.to, switch::resume))
     }
 
     /// What the boot partitions hold, set against the state as kept now;
@@ -206,17 +309,22 @@ mod sys {
     /// nothing is: the one who switches to the installed system on the
     /// systems page, told of it there, asks for that.
     pub fn ensure_installed() -> Result<bool> {
-        resume()?;
+        let _lock = lock()?;
+        restore_installed()
+    }
+
+    fn restore_installed() -> Result<bool> {
+        resume_now()?;
         let state = state()?;
         let Some(slot) = state.occupied.as_deref().map(|s| Slot::from_suffix(s).with_context(|| format!("the other system is in slot {s:?}"))).transpose()? else {
             return Ok(false);
         };
         ensure!(
             held(&state, slot)? != Held::Rewritten,
-            "the boot partitions of slot {} no longer hold the second system's boot set as Skyward wrote it, and the main system's is not written over what is there unasked: switch to the main system in Dual boot first",
+            "the boot partitions of slot {} changed since Skyward wrote them: switch to the main system in Multi-boot first",
             slot.suffix()
         );
-        switch_to(slot, Who::Installed)?;
+        switch_now(slot, Who::Installed)?;
         Ok(true)
     }
 
@@ -238,10 +346,13 @@ mod sys {
 
     /// Whether the installed system's vendor_boot or dtbo in `slot` differ
     /// from when the other system was installed.
-    pub fn changed(state: &State, slot: Slot) -> Result<bool> {
-        let Some(system) = &state.system else { return Ok(false) };
-        Ok(sum_of(&store::partition(by_name(), "vendor_boot", slot))? != system.vendor_boot
-            || sum_of(&store::partition(by_name(), "dtbo", slot))? != system.dtbo)
+    pub fn changed(state: &State, slot: Slot) -> Result<Vec<bool>> {
+        if state.systems.is_empty() {
+            return Ok(Vec::new());
+        }
+        let vendor_boot = sum_of(&store::partition(by_name(), "vendor_boot", slot))?;
+        let dtbo = sum_of(&store::partition(by_name(), "dtbo", slot))?;
+        Ok(state.systems.iter().map(|s| s.vendor_boot != vendor_boot || s.dtbo != dtbo).collect())
     }
 
     /// Install the system in the package `zip`, whose contents are
@@ -251,69 +362,112 @@ mod sys {
     /// is none yet. `slot` is the slot the phone runs from, whose
     /// init_boot image lends its header.
     pub fn install<R: Read + Seek>(zip: &mut ZipArchive<R>, contents: &Contents, size: u64, program: &[u8], slot: Slot, progress: &mut dyn FnMut(Step)) -> Result<()> {
-        writable(|| install_now(zip, contents, size, program, slot, progress))
+        let _lock = lock()?;
+        ensure!(skyward_block::mount::is_mount_point(data())?, "the data partition is not open");
+        writable(|| {
+            let mut state = State::load(Path::new(PATH))?;
+            cleanup(&mut state)?;
+            let result = install_now(&mut state, zip, contents, size, program, slot, progress);
+            // A failed rename or sync can leave either complete registry
+            // on disk. Only the registry on disk decides which files live.
+            if result.is_err() {
+                cleanup(&mut State::load(Path::new(PATH))?)?;
+            }
+            result
+        })
     }
 
-    fn install_now<R: Read + Seek>(zip: &mut ZipArchive<R>, contents: &Contents, size: u64, program: &[u8], slot: Slot, progress: &mut dyn FnMut(Step)) -> Result<()> {
-        let path = Path::new(PATH);
-        let mut state = State::load(path)?;
-        ensure!(state.switching.is_none(), "a switch begun before is not done yet");
-        ensure!(state.system.is_none(), "another system is installed already");
-        ensure!(size >= contents.least(), "a root of {size} bytes is less than the {} the system takes", contents.least());
-        let room = room_now(slot)?;
-        ensure!(size <= room, "the data partition has room for {room} bytes, less than {size}");
+    fn allocate(state: &mut State, file: PathBuf, size: u64, progress: &mut dyn FnMut(Step)) -> Result<Area> {
+        area::create_tracked(&file, size, |f| {
+            let (inode, generation) = area::identity(f)?;
+            state.pending_files.push(PendingFile { path: file.clone(), inode, generation });
+            state.save(Path::new(PATH))
+        }, &mut |done, total| progress(Step::Allocating { done, total }))
+    }
+
+    fn storage_folder() -> Result<&'static Path> {
         let folder = Path::new(FOLDER);
-        fs::create_dir_all(folder).with_context(|| format!("make {}", folder.display()))?;
-        if state.store.is_none() {
-            let (boot, init_boot) = (skyward_block::size_bytes(store::partition(by_name(), store::BOOT, slot))?, skyward_block::size_bytes(store::partition(by_name(), store::INIT_BOOT, slot))?);
-            let area = area::create(&folder.join("store"), Store::size_for(boot, init_boot), &mut |done, total| progress(Step::Allocating { done, total }))?;
-            state.store = Some(Store { area, boot, init_boot });
-            state.save(path)?;
-        }
-        let id = contents.manifest.id.clone();
-        let file = folder.join(format!("{id}.img"));
-        let root = area::create(&file, size + HEADER, &mut |done, total| progress(Step::Allocating { done, total }))?;
-        let made = (|| -> Result<System> {
-            write_root(zip, &root, contents.root, progress)?;
-            progress(Step::Finishing);
-            let start = Start { id: id.clone(), filesystem: contents.manifest.filesystem.clone(), init: contents.manifest.init.clone(), root: root.clone() };
-            let (init_boot, own_ramdisk) = match contents.init_boot {
-                true => {
-                    let mut own = Vec::new();
-                    zip.by_name(INIT_BOOT).context("open init_boot.img")?.read_to_end(&mut own).context("read init_boot.img")?;
-                    let (image, own_ramdisk) = boot::with_start(&own, program, &start)?;
-                    (image, Some(own_ramdisk))
+        for dir in [folder.parent().expect("Skyward folder"), folder] {
+            match fs::DirBuilder::new().mode(0o700).create(dir) {
+                Ok(()) => File::open(dir.parent().expect("folder under data"))?.sync_all()?,
+                Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+                    ensure!(fs::symlink_metadata(dir)?.is_dir(), "unexpected systems directory {}", dir.display());
                 }
-                false => (boot::init_boot(&fs::read(store::partition(by_name(), store::INIT_BOOT, slot)).context("read the phone's init_boot")?, program, &start)?, None),
-            };
-            let set = with_store(&state, |device| {
-                let mut image = zip.by_name(BOOT).context("open boot.img")?;
-                let store = state.store.as_ref().expect("made above");
-                store::put(store, device, OTHER, &mut image, contents.boot, &init_boot)
-            })?;
-            Ok(System {
-                id: id.clone(),
-                name: contents.manifest.name.clone(),
-                version: contents.manifest.version.clone(),
-                filesystem: contents.manifest.filesystem.clone(),
-                init: contents.manifest.init.clone(),
-                root: root.clone(),
-                set,
-                own_ramdisk,
-                vendor_boot: sum_of(&store::partition(by_name(), "vendor_boot", slot))?,
-                dtbo: sum_of(&store::partition(by_name(), "dtbo", slot))?,
-            })
-        })();
-        match made {
-            Ok(system) => {
-                state.system = Some(system);
-                state.save(path)
+                Err(e) => return Err(e).with_context(|| format!("make {}", dir.display())),
             }
-            Err(e) => match root.remove() {
-                Ok(()) => Err(e),
-                Err(r) => Err(e.context(format!("taking the root away afterwards failed too: {r:#}"))),
-            },
         }
+        Ok(folder)
+    }
+
+    fn install_now<R: Read + Seek>(state: &mut State, zip: &mut ZipArchive<R>, contents: &Contents, size: u64, program: &[u8], slot: Slot, progress: &mut dyn FnMut(Step)) -> Result<()> {
+        ensure!(state.switching.is_none(), "a switch begun before is not done yet");
+        let id = SystemId::new(&contents.manifest.id)?;
+        ensure!(state.guest(id).is_none(), "a guest with id {id} is already installed");
+        ensure!(size >= contents.least(), "a root of {size} bytes is less than the {} the system takes", contents.least());
+        let room = room_for(state, slot)?;
+        ensure!(size <= room, "the data partition has room for {room} bytes, less than {size}");
+        let folder = storage_folder()?;
+        let nonce = area::new_id()?;
+        let boot = skyward_block::size_bytes(store::partition(by_name(), store::BOOT, slot))?;
+        let init_boot = skyward_block::size_bytes(store::partition(by_name(), store::INIT_BOOT, slot))?;
+        let shared = match &state.store {
+            Some(store) => {
+                ensure!(store.boot == boot && store.init_boot == init_boot, "boot partition sizes differ from the saved store");
+                store.clone()
+            }
+            None => Store {
+                area: allocate(state, folder.join(format!("main-{nonce}.boot")), Store::size_for(boot, init_boot), progress)?,
+                boot,
+                init_boot,
+            },
+        };
+        let boot_store = if state.systems.iter().any(|s| s.boot_store.is_none()) {
+            let area = allocate(state, folder.join(format!("guest-{nonce}.boot")), Store::guest_size(boot, init_boot), progress)?;
+            Some(Store { area, boot, init_boot })
+        } else {
+            None
+        };
+        let root = allocate(state, folder.join(format!("guest-{nonce}.img")), size + HEADER, progress)?;
+        write_root(zip, &root, contents.root, progress)?;
+        progress(Step::Finishing);
+        let start = Start { id: id.to_string(), filesystem: contents.manifest.filesystem.clone(), init: contents.manifest.init.clone(), root: root.clone() };
+        let (image, own_ramdisk) = if contents.init_boot {
+            let mut own = Vec::new();
+            zip.by_name(INIT_BOOT).context("open init_boot.img")?.read_to_end(&mut own).context("read init_boot.img")?;
+            let (image, len) = boot::with_start(&own, program, &start)?;
+            (image, Some(len))
+        } else {
+            let template = if state.occupied.as_deref() == Some(slot.suffix()) {
+                let saved = state.saved.as_ref().context("the occupied slot has no saved boot set")?;
+                with_store(&shared, STORE_DEVICE, |node| store::init_boot(&shared, node, saved))?
+            } else {
+                fs::read(store::partition(by_name(), store::INIT_BOOT, slot)).context("read the phone's init_boot")?
+            };
+            (boot::init_boot(&template, program, &start)?, None)
+        };
+        let (store, entry) = boot_store.as_ref().map_or((&shared, OTHER), |guest| (guest, 0));
+        let set = with_store(store, STORE_DEVICE, |device| {
+            let mut kernel = zip.by_name(BOOT).context("open boot.img")?;
+            store::put(store, device, entry, &mut kernel, contents.boot, &image)
+        })?;
+        let guest = System {
+            id: id.to_string(),
+            name: contents.manifest.name.clone(),
+            version: contents.manifest.version.clone(),
+            filesystem: contents.manifest.filesystem.clone(),
+            init: contents.manifest.init.clone(),
+            root,
+            set,
+            boot_store,
+            own_ramdisk,
+            vendor_boot: sum_of(&store::partition(by_name(), "vendor_boot", slot))?,
+            dtbo: sum_of(&store::partition(by_name(), "dtbo", slot))?,
+        };
+        File::open(folder)?.sync_all()?;
+        state.store = Some(shared);
+        state.systems.push(guest);
+        state.pending_files.clear();
+        state.save(Path::new(PATH))
     }
 
     /// Write the root image from the package into the root area, after its
@@ -357,30 +511,71 @@ mod sys {
         gone
     }
 
-    /// Take the other system away: its boot set out of the partitions
-    /// where it is there, its root and the store out of the data partition,
-    /// which has to be open, and the state with them.
-    pub fn remove() -> Result<()> {
+    /// Clear abandoned allocations or files released by a committed removal.
+    /// A file still named by the registry belongs to a live system.
+    fn cleanup(state: &mut State) -> Result<()> {
+        if state.pending_files.is_empty() {
+            return Ok(());
+        }
         ensure!(skyward_block::mount::is_mount_point(data())?, "the data partition is not open");
-        ensure_installed()?;
+        let folder = Path::new(FOLDER);
+        if folder.try_exists()? {
+            ensure!(folder.canonicalize()? == folder, "unexpected systems directory");
+        }
+        // An earlier I/O error can leave one of our mappings alive. Never
+        // return its blocks to the filesystem while the mapping exists.
+        for name in [ROOT_DEVICE, STORE_DEVICE, GUEST_STORE_DEVICE, area::NEW_DEVICE] {
+            if dm::status(name)?.is_some() {
+                dm::remove(name)?;
+            }
+        }
+        for file in &state.pending_files {
+            ensure!(managed_path(&file.path) && file.inode != 0, "invalid file in the systems cleanup journal");
+            if !is_registered(state, &file.path) {
+                area::remove_tracked(&file.path, file.inode, file.generation)?;
+            }
+        }
+        if folder.try_exists()? {
+            File::open(folder)?.sync_all()?;
+        }
+        state.pending_files.clear();
+        state.save(Path::new(PATH))
+    }
+
+    /// Record the inode of an area after checking that its file still holds
+    /// the storage we own. Unlinking follows the registry commit.
+    fn retire(files: &mut Vec<PendingFile>, area: &Area) -> Result<()> {
+        if area.file.try_exists()? {
+            ensure!(managed_path(&area.file), "unexpected area file {}", area.file.display());
+            let (inode, generation) = area::identity(&area.verified_file()?)?;
+            files.push(PendingFile { path: area.file.clone(), inode, generation });
+        }
+        Ok(())
+    }
+
+    /// Remove just this guest. Restore the primary boot set if the selected
+    /// guest is active and keep the shared store while any guest remains.
+    pub fn remove(id: SystemId) -> Result<()> {
+        let _lock = lock()?;
+        ensure!(skyward_block::mount::is_mount_point(data())?, "the data partition is not open");
+        resume_now()?;
+        if state()?.active == Some(id) {
+            restore_installed()?;
+        }
         writable(|| {
             let path = Path::new(PATH);
             let mut state = State::load(path)?;
-            if let Some(system) = &state.system {
-                system.root.remove()?;
-                state.system = None;
-                state.save(path)?;
+            cleanup(&mut state)?;
+            if state.systems.len() == 1 && state.guest(id).is_some() {
+                for slot in [Slot::A, Slot::B] {
+                    ensure!(held(&state, slot)? == Held::Recorded, "slot {} still holds unrecorded guest boot images; keep the last guest and its boot store", slot.suffix());
+                }
             }
-            if let Some(store) = &state.store {
-                store.area.remove()?;
-                state = State::default();
-                state.save(path)?;
+            for area in detach(&mut state, id)? {
+                retire(&mut state.pending_files, &area)?;
             }
-            let folder = PathBuf::from(FOLDER);
-            if folder.exists() && fs::read_dir(&folder)?.next().is_none() {
-                fs::remove_dir(&folder).with_context(|| format!("delete {}", folder.display()))?;
-            }
-            Ok(())
+            state.save(path)?;
+            cleanup(&mut state)
         })
     }
 }
@@ -401,5 +596,52 @@ mod tests {
         assert_eq!(sizes(100 << 20, 9 * GB), [GB, 8 * GB]);
         assert_eq!(sizes(20 * GB, 300 * GB), [20 * GB, 32 * GB, 64 * GB, 128 * GB, 256 * GB]);
         assert!(sizes(20 * GB, 10 * GB).is_empty(), "no room for it at all");
+        assert!(sizes(u64::MAX, 10 * GB).is_empty());
+    }
+
+    #[test]
+    fn cleanup_only_accepts_legacy_or_generated_area_names_in_the_systems_directory() {
+        let dir = std::path::Path::new(FOLDER);
+        for path in ["store", "ubuntu.img", "guest-00112233445566778899aabbccddeeff.boot", "main-00112233445566778899aabbccddeeff.boot"] {
+            assert!(managed_path(&dir.join(path)));
+        }
+        for path in ["user.txt", "../ubuntu.img", "nested/guest.img", "main-other.boot", "/data/saved.img"] {
+            assert!(!managed_path(&dir.join(path)));
+        }
+    }
+
+    #[test]
+    fn removing_one_guest_keeps_the_others_boot_set_and_the_main_backup() {
+        use crate::state::{tests::area, Saved, System, Who};
+
+        let shared = Store { area: area("store", Store::size_for(8192, 4096)), boot: 8192, init_boot: 4096 };
+        let dedicated = Store { area: area("guest.boot", Store::guest_size(8192, 4096)), ..shared.clone() };
+        let first = System {
+            id: "one".into(), name: "Guest".into(), version: "1".into(), filesystem: "ext4".into(), init: "/init".into(),
+            root: area("one.img", GB), set: Saved { entry: crate::store::OTHER, boot: "aa".into(), init_boot: "bb".into() },
+            boot_store: None, own_ramdisk: None, vendor_boot: String::new(), dtbo: String::new(),
+        };
+        let second = System { id: "two".into(), root: area("two.img", GB), set: Saved { entry: 0, ..first.set.clone() }, boot_store: Some(dedicated.clone()), ..first.clone() };
+        let saved = Saved { entry: 1, ..first.set.clone() };
+        let second_id = SystemId::new("two").unwrap();
+        let mut state = State {
+            store: Some(shared.clone()), systems: vec![first.clone(), second.clone()], saved: Some(saved.clone()),
+            occupied: Some("_a".into()), active: Some(second_id), ..State::default()
+        };
+        let view = overview(&state, Named { name: "HyperOS".into(), version: None }, &[true, false], Held::Recorded);
+        assert_eq!(view.starting, Who::Guest(second_id));
+        assert_eq!(view.others.iter().map(|s| (s.id.as_str(), s.changed)).collect::<Vec<_>>(), [("one", true), ("two", false)]);
+        assert_eq!(Store::needed(&state, 8192, 4096), dedicated.area.size);
+        assert!(detach(&mut state, second_id).is_err(), "the active guest stays until the primary is restored");
+        assert_eq!(detach(&mut state, SystemId::new("one").unwrap()).unwrap(), std::slice::from_ref(&first.root));
+        assert!(!is_registered(&state, &first.root.file));
+        assert!(is_registered(&state, &second.root.file) && is_registered(&state, &dedicated.area.file));
+        assert!(is_registered(&state, &shared.area.file));
+        assert_eq!(state.saved, Some(saved));
+        assert_eq!(Store::needed(&state, 8192, 4096), 0, "the shared store now has a free guest entry");
+        state.active = None;
+        state.occupied = None;
+        assert_eq!(detach(&mut state, second_id).unwrap(), [second.root, dedicated.area, shared.area]);
+        assert_eq!(state, State::default());
     }
 }

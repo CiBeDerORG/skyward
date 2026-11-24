@@ -2,7 +2,7 @@ use crate::app::{
     Action, BackupAt, BackupEnd, BackupJob, Check, ClashChoice, Confirm, Damage, Data, Dock, DownloadEnd, EraseStop, Field, FileKind,
     FileOp, FileTask, Fold, Folder, Frame, FsAction, FsChoice, FsRow, Have, HeroArt, Hit, Install, JobEnd, Keys, Pick, Place, Region, Rows,
     Screen, SkywardCheck, SkywardEnd, SkywardJob, SkywardStage, Slider, Source, State, Switch, SystemsWork, Target, UsbDrive, UsbLink, Wipe,
-    ADDABLE, BACKUP_PARTS, DATA_PART, DATA_PARTITION, DOWNLOADS, FASTBOOT_CHOICES, MEDIA_PART, SCREEN_OFF, TARGETS, TIME_ZONES, UTC, WIPES, installs, listed, starting,
+    ADDABLE, BACKUP_PARTS, DATA_PART, DATA_PARTITION, DOWNLOADS, FASTBOOT_CHOICES, MEDIA_PART, SCREEN_OFF, TARGETS, TIME_ZONES, UTC, WIPES, can_switch, guest, installs, listed,
 };
 use crate::canvas::Canvas;
 use crate::color::Rgba;
@@ -134,8 +134,8 @@ pub fn confirm_label(which: Confirm, s: &State) -> (&'static str, bool) {
         Confirm::RunScript => (confirm::INSTALL, true),
         Confirm::Merge => (confirm::MERGE, true),
         Confirm::Relabel => (confirm::FIX, true),
-        Confirm::SwitchSystem => (confirm::SWITCH_AND_REBOOT, false),
-        Confirm::RemoveSystem => (confirm::REMOVE, true),
+        Confirm::SwitchSystem(_) => (confirm::SWITCH_AND_REBOOT, false),
+        Confirm::RemoveSystem(_) => (confirm::REMOVE, true),
         Confirm::InstallSystem => (confirm::INSTALL, false),
     };
     (s.lang.pick(label), danger)
@@ -302,13 +302,13 @@ pub fn home(cx: &Ctx) -> Frame {
 /// starts, where a second system is installed, once they are read.
 fn systems_value(cx: &Ctx) -> Option<String> {
     let l = cx.state.lang;
-    match &cx.state.systems {
-        Some(Ok(systems)) => Some(match (&systems.other, starting(systems)) {
-            (None, _) => l.pick(texts::home::NO_SECOND_SYSTEM).into(),
-            (Some(_), Who::Installed) => systems.installed.name.clone(),
-            (Some(other), Who::Other) => other.name.clone(),
-        }),
-        _ => None,
+    let systems = cx.state.systems.as_ref()?.as_ref().ok()?;
+    if systems.others.is_empty() {
+        return Some(l.pick(texts::home::NO_SECOND_SYSTEM).into());
+    }
+    match systems.starting {
+        Who::Installed => Some(systems.installed.name.clone()),
+        who => guest(systems, who).map(|other| other.name.clone()),
     }
 }
 
@@ -3157,16 +3157,13 @@ pub fn slot(cx: &Ctx) -> Frame {
     Frame::new(t, c, out, title, top)
 }
 
-/// The two systems as big cards one over the other, laid out as the boot
-/// slot page lays out its slots: the main system, in the phone's own
-/// partitions, and the second, whose files lie in the data partition, or
-/// the place to install one, the one that starts next checked. Picking the
-/// other and swiping writes its boot images into the slot that starts
-/// next, and restarts into it. Under them, the second system, and removing
-/// it.
+/// Choose a system by its package ID. Its boot and removal controls follow
+/// the list; installing another package stays available as the list grows.
 pub fn systems(cx: &Ctx) -> Frame {
     let (t, f, s, i, l) = (cx.t, cx.f, cx.state, cx.info, cx.state.lang);
-    let mut c = long_page(cx);
+    let count = s.systems.as_ref().and_then(|read| read.as_ref().ok()).map_or(0, |read| read.others.len());
+    let extra = widgets::system_cards_height(t, count);
+    let mut c = sheet(cx, (t.m.h * 3).saturating_add(extra.ceil() as u32), t.pal.bg);
     let mut out = Vec::new();
     let top = t.m.content_top;
     let title = l.pick(texts::page::DUAL_BOOT);
@@ -3178,7 +3175,7 @@ pub fn systems(cx: &Ctx) -> Frame {
             SystemsWork::Switching(to) => {
                 let name = match (&s.systems, to) {
                     (Some(Ok(systems)), Who::Installed) => Some(systems.installed.name.as_str()),
-                    (Some(Ok(systems)), Who::Other) => systems.other.as_ref().map(|o| o.name.as_str()),
+                    (Some(Ok(systems)), who) => guest(systems, who).map(|other| other.name.as_str()),
                     _ => None,
                 };
                 let heading = match name {
@@ -3202,81 +3199,96 @@ pub fn systems(cx: &Ctx) -> Frame {
         }
         None => return Frame::new(t, fit(c, t, top), out, title, top),
     };
-    let starts = starting(systems);
+    let starts = systems.starting;
     let chosen = s.system_pick.unwrap_or(starts);
-    let second_role = l.pick(texts::systems::SECOND);
-    // Boot partitions that hold a second system's image nothing is kept of
-    // start neither system the page knows.
-    let main = SystemCard {
-        role: l.pick(texts::systems::MAIN),
+    let next = l.pick(texts::reboot::NEXT_BOOT);
+    let main_role = l.pick(texts::systems::MAIN);
+    let main_label = if starts == Who::Installed && systems.held == Held::Recorded { format!("{main_role} · {next}") } else { main_role.into() };
+    let mut cards = vec![SystemCard {
+        role: &main_label,
         name: &systems.installed.name,
         detail: systems.installed.version.as_deref().unwrap_or_default(),
         mark: SystemMark::Check(chosen == Who::Installed && systems.held != Held::Unrecorded),
-    };
-    let second = match &systems.other {
-        Some(other) => SystemCard { role: second_role, name: &other.name, detail: &other.version, mark: SystemMark::Check(chosen == Who::Other) },
-        None => SystemCard {
-            role: second_role,
+    }];
+    let mut actions = vec![Action::PickSystem(Who::Installed)];
+    let labels: Vec<_> = systems.others.iter().map(|other| {
+        let id = other.id.as_str();
+        if starts == Who::Guest(other.id) && systems.held == Held::Recorded { format!("{id} · {next}") } else { id.to_owned() }
+    }).collect();
+    for (other, role) in systems.others.iter().zip(&labels) {
+        let who = Who::Guest(other.id);
+        cards.push(SystemCard { role, name: &other.name, detail: &other.version, mark: SystemMark::Check(chosen == who) });
+        actions.push(Action::PickSystem(who));
+    }
+    if systems.others.is_empty() {
+        cards.push(SystemCard {
+            role: l.pick(texts::systems::SECOND),
             name: l.pick(texts::systems::INSTALL),
             detail: l.pick(texts::systems::CHOOSE_PACKAGE),
             mark: SystemMark::Opens,
-        },
-    };
-    let y = widgets::section_first(&mut c, t, f, top, l.pick(texts::reboot::NEXT_BOOT));
-    let shown = widgets::system_cards(&mut c, t, f, y, &[main, second]);
-    let second_opens = match systems.other {
-        Some(_) => Action::PickSystem(Who::Other),
-        None => Action::Open(Screen::Install),
-    };
-    out.extend(hits(&shown.rows, &[Action::PickSystem(Who::Installed), second_opens]));
+        });
+        actions.push(Action::Open(Screen::Install));
+    }
+    let y = widgets::section_first(&mut c, t, f, top, next);
+    let shown = widgets::system_cards(&mut c, t, f, y, &cards);
+    out.extend(hits(&shown.rows, &actions));
     let mut y = shown.bottom + t.m.dp(12.0);
     if let Some(why) = &s.system_notice {
         y = widgets::info_card(&mut c, t, f, y, &[(l.pick(texts::systems::SECOND_FAILED), why.clone())]);
     }
-    if chosen != starts {
-        match (chosen, fmt::snapshot_system_note(l, &i.snapshot)) {
-            (Who::Other, Some(note)) => y = widgets::footnote(&mut c, t, f, y, note),
-            _ => {
-                let (label, danger) = confirm_label(Confirm::SwitchSystem, s);
-                let track = widgets::confirm(&mut c, t, f, y + t.m.dp(12.0), label, danger, s.confirm);
-                out.push(Hit { rect: track, action: Action::Confirm(Confirm::SwitchSystem) });
-                y = track.y + track.h;
-            }
-        }
-    }
-    y = widgets::footnote(&mut c, t, f, y, l.pick(texts::systems::WHAT));
     match systems.held {
         Held::Recorded => {}
         Held::Rewritten => y = widgets::footnote(&mut c, t, f, y, l.pick(texts::systems::REWRITTEN)),
         Held::Unrecorded => y = widgets::footnote(&mut c, t, f, y, l.pick(texts::systems::UNRECORDED)),
     }
-    if systems.other.is_some() && systems.changed {
+    let selected_guest = guest(systems, chosen);
+    if selected_guest.is_some_and(|other| other.changed) {
         y = widgets::footnote(&mut c, t, f, y, l.pick(texts::systems::CHANGED));
     }
-    if let Some(other) = &systems.other {
-        y = widgets::section(&mut c, t, f, y, second_role);
+    if can_switch(systems, chosen) && s.remove_system.is_none() {
+        match (chosen, fmt::snapshot_system_note(l, &i.snapshot)) {
+            (Who::Guest(_), Some(note)) => y = widgets::footnote(&mut c, t, f, y, note),
+            _ => {
+                let (label, danger) = confirm_label(Confirm::SwitchSystem(chosen), s);
+                let track = widgets::confirm(&mut c, t, f, y + t.m.dp(12.0), label, danger, s.confirm);
+                out.push(Hit { rect: track, action: Action::Confirm(Confirm::SwitchSystem(chosen)) });
+                y = track.y + track.h;
+            }
+        }
+    }
+    y = widgets::footnote(&mut c, t, f, y, l.pick(texts::systems::WHAT));
+    if let Some(other) = selected_guest {
+        let target = format!("{} ({})", other.name, other.id.as_str());
+        y = widgets::section(&mut c, t, f, y, &target);
         let size = fmt::bytes(other.size);
         let facts = widgets::list(&mut c, t, f, y, &[Row::new(l.pick(texts::systems::SPACE_USED)).trail(Trail::Text(&size))]);
-        let mounted = matches!(s.data, Data::Open | Data::Locked { .. });
-        let remove = Row::new(l.pick(texts::systems::REMOVE)).tint(t.pal.danger);
-        let (remove, act) = match mounted {
-            true => (remove.trail(Trail::None), Action::AskDelete),
-            false => (remove.subtitle(l.pick(texts::decrypt::NEEDED)), Action::Open(Screen::Decrypt)),
-        };
-        let removing = widgets::list(&mut c, t, f, facts.bottom + t.m.card_gap, &[remove]);
-        out.extend(hits(&removing.rows, &[act]));
-        y = removing.bottom;
-        if s.asking_delete && mounted {
-            let ask = l.pick(match starts {
-                Who::Other => texts::systems::ASK_REMOVE_RUNNING,
-                Who::Installed => texts::systems::ASK_REMOVE,
-            });
-            let y2 = widgets::footnote(&mut c, t, f, y, ask);
-            let (label, danger) = confirm_label(Confirm::RemoveSystem, s);
-            let track = widgets::confirm(&mut c, t, f, y2 + t.m.dp(24.0), label, danger, s.confirm);
-            out.push(Hit { rect: track, action: Action::Confirm(Confirm::RemoveSystem) });
-            y = track.y + track.h;
+        y = facts.bottom;
+        if chosen != starts || systems.held == Held::Recorded {
+            let mounted = matches!(s.data, Data::Open | Data::Locked { .. });
+            let remove = Row::new(l.pick(texts::systems::REMOVE)).tint(t.pal.danger);
+            let (remove, act) = match mounted {
+                true => (remove.trail(Trail::None), Action::AskRemoveSystem(other.id)),
+                false => (remove.subtitle(l.pick(texts::decrypt::NEEDED)), Action::Open(Screen::Decrypt)),
+            };
+            let removing = widgets::list(&mut c, t, f, y + t.m.card_gap, &[remove]);
+            out.extend(hits(&removing.rows, &[act]));
+            y = removing.bottom;
+            if s.remove_system == Some(other.id) && mounted {
+                let prompt = if chosen == starts { texts::systems::ASK_REMOVE_RUNNING } else { texts::systems::ASK_REMOVE };
+                let y2 = widgets::footnote(&mut c, t, f, y, &format!("{target}\n{}", l.pick(prompt)));
+                let which = Confirm::RemoveSystem(other.id);
+                let (label, danger) = confirm_label(which, s);
+                let track = widgets::confirm(&mut c, t, f, y2 + t.m.dp(24.0), label, danger, s.confirm);
+                out.push(Hit { rect: track, action: Action::Confirm(which) });
+                y = track.y + track.h;
+            }
         }
+    }
+    if !systems.others.is_empty() {
+        let install = Row::new(l.pick(texts::systems::INSTALL)).subtitle(l.pick(texts::systems::CHOOSE_PACKAGE));
+        let add = widgets::list(&mut c, t, f, y + t.m.card_gap, &[install]);
+        out.extend(hits(&add.rows, &[Action::Open(Screen::Install)]));
+        y = add.bottom;
     }
     Frame::new(t, fit(c, t, y), out, title, top)
 }
