@@ -221,9 +221,6 @@ impl App {
             self.morph = None;
         }
         let t = self.theme();
-        if let Some((which, track)) = self.knob.take() {
-            self.paint_knob(&t, f, which, track);
-        }
         if self.toast.as_ref().is_some_and(|m| now >= m.1) {
             self.toast = None;
         }

@@ -122,13 +122,13 @@ pub enum Screen {
     Editor,
     Terminal,
     /// Giving the data partition's files the SELinux labels the installed
-    /// system's rules give them: what it does and a swipe to start, then
+    /// system's rules give them: what it does and a button to start, then
     /// how far it has come and how it ended.
     Relabel,
     /// The partitions whose filesystems can be repaired or made afresh as
     /// another.
     Filesystems,
-    /// One of them: what it holds, and what to do to it, with a swipe to
+    /// One of them: what it holds, and what to do to it, with a button to
     /// do it.
     Filesystem,
     /// Work on whole partitions under way, and how it ended: the
@@ -249,7 +249,7 @@ pub enum Action {
     Slider(Slider),
     /// Mount or unmount the mount page's partition at this index.
     MountToggle(usize),
-    /// A swipe-to-confirm track; dragging the knob to the far end confirms.
+    /// A button that runs the selected operation.
     Confirm(Confirm),
     /// The pattern grid on the unlock page.
     Pattern,
@@ -290,9 +290,9 @@ pub enum Action {
     LogsTo(usize),
     /// Save the logs ticked where they are to go.
     ExportLogs,
-    /// Pick this slot to start next; a swipe then switches to it.
+    /// Pick this slot to start next; the confirmation button then switches to it.
     PickSlot(Slot),
-    /// Pick this system to start next; a swipe then switches to it.
+    /// Pick this system to start next; the confirmation button then switches to it.
     PickSystem(Who),
     /// Give the root of the system being installed the size at this place
     /// in those offered.
@@ -336,7 +336,7 @@ pub enum Action {
     /// Turn this permission bit of the entry the file page shows on or off.
     ModeBit(u32),
     /// Ask to delete the entry the file page shows, or the backup the
-    /// restore page shows; a swipe then confirms.
+    /// restore page shows; the confirmation button then confirms.
     AskDelete,
     /// Ask to remove this guest and its data.
     AskRemoveSystem(SystemId),
@@ -613,7 +613,6 @@ enum Drag {
     /// threshold, lifting goes back.
     Edge { start: f32, from_left: bool, armed: bool, x: f32, cy: f32 },
     Slider(Slider, Rect),
-    Confirm { which: Confirm, track: Rect, grab: f32 },
     /// Scrolling a terminal's screen back through what the shell wrote, or
     /// the editor's text, `carry` being the part of a row not yet scrolled.
     History { last: f32, carry: f32, pitch: f32 },
@@ -645,10 +644,6 @@ enum Press {
     /// comes up; held long enough over an entry of the file manager, it
     /// opens what can be done with the entry, as a long press does.
     Power { spot: Spot, at: u64 },
-    /// The power key on a swipe-to-confirm control, whose knob slides along
-    /// its track at `track` from `at` while the key is held; let go once
-    /// it has slid far enough, the control confirms.
-    Slide { which: Confirm, track: Rect, at: u64 },
     /// Done with: nothing more comes of it until it is let go.
     Spent,
 }
@@ -764,11 +759,6 @@ const REPEAT_MS: u64 = 50;
 /// the two waits this long, or until it is let go, before it does what it
 /// does alone.
 const CHORD_MS: u64 = 150;
-/// How far along its track the knob of a swipe-to-confirm control has to
-/// be let go to confirm.
-const SLID: f32 = 0.9;
-/// How long the power key held takes the knob the whole way along.
-const SLIDE_MS: u64 = 700;
 /// The response, in seconds, of the spring the page scrolls on to show
 /// the control the keys moved to.
 const SEEK_PERIOD: f32 = 0.35;
@@ -1079,9 +1069,6 @@ pub struct App {
     /// moved to or to fold its search bar whole or not at all: where it
     /// comes to rest, and the spring taking it there.
     seek: Option<(f32, Spring)>,
-    /// A swipe-to-confirm control whose knob the power key moved, to draw
-    /// again with the page.
-    knob: Option<(Confirm, Rect)>,
     /// The slider lit takes the volume keys, until the power key lets it
     /// go.
     adjusting: bool,
@@ -1214,7 +1201,6 @@ impl App {
             button: None,
             chord: None,
             seek: None,
-            knob: None,
             adjusting: false,
             height: 0.0,
             drawn: Vec::new(),
@@ -1304,13 +1290,11 @@ impl App {
     /// backlight eases, else when a shown message should disappear or the
     /// panel should dim or go off.
     pub fn deadline(&self, now: u64) -> Option<u64> {
-        let sliding = matches!(self.button, Some((_, Press::Slide { .. }))) && self.state.confirm < 1.0;
         let moving = self.display_on
             && (self.fling.is_some()
                 || self.glide.is_some()
                 || self.bounce.is_some()
                 || self.seek.is_some()
-                || sliding
                 || self.cue.is_some()
                 || self.title.moving(now)
                 || self.bar.moving(now)
@@ -1477,15 +1461,6 @@ impl App {
                 self.seek = None;
             }
         }
-        // The power key held on a swipe-to-confirm control slides its knob.
-        if let Some((_, Press::Slide { which, track, at })) = self.button {
-            let along = (now.saturating_sub(at) as f32 / SLIDE_MS as f32).min(1.0);
-            if along != self.state.confirm {
-                self.state.confirm = along;
-                self.knob = Some((which, track));
-                self.dirty = true;
-            }
-        }
         // A volume key held moves the light on and on, once the page it
         // last moved on has been drawn.
         if let Some((key, Press::Volume { down, next })) = self.button
@@ -1587,7 +1562,6 @@ impl App {
         self.frame = None;
         self.stale.clear();
         self.spots = None;
-        self.knob = None;
         self.row_art = None;
         self.shown = None;
         self.layer = None;

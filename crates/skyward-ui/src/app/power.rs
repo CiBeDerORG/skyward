@@ -98,16 +98,12 @@ impl App {
         self.curtain.set(false, now);
         self.display_on = false;
         self.bright = full_brightness();
-        match std::mem::replace(&mut self.drag, Drag::Idle) {
-            Drag::Confirm { .. } => {
-                self.state.confirm = 0.0;
-                self.refresh();
-            }
-            Drag::Pattern => {
-                self.state.pattern.clear();
-                self.refresh();
-            }
-            _ => {}
+        if matches!(std::mem::replace(&mut self.drag, Drag::Idle), Drag::Pattern) {
+            self.state.pattern.clear();
+            self.refresh();
+        }
+        if self.state.held.take().is_some() {
+            self.refresh();
         }
         self.drop_button();
         self.adjusting = false;
@@ -506,19 +502,14 @@ mod tests {
     }
 
     #[test]
-    fn a_finger_held_as_the_panel_goes_off_lets_go() {
+    fn a_confirmation_held_while_the_panel_goes_off_is_cancelled() {
         let (f, i) = (fonts(), info());
         let mut app = App::new(Screen::Reboot, W, H, PPD);
-        let track = app.frame(&f, &i).hits.iter().find(|h| h.action == Action::Confirm(Confirm::Reboot)).unwrap().rect;
-        let y = track.centre().1;
-        app.touch(Touch::Down(track.x + track.h / 2.0, y), &f, 0);
-        app.touch(Touch::Move(track.x + track.w * 0.6, y), &f, 10);
-        assert!(app.state.confirm > 0.0);
+        let (x, y) = spot(&mut app, &f, &i, Action::Confirm(Confirm::Reboot));
+        assert!(app.touch(Touch::Down(x, y), &f, 0).is_empty());
         press(&mut app, Key::Power, 20);
-        assert_eq!(app.state.confirm, 0.0, "the knob is back at the start");
-        app.touch(Touch::Move(track.x + track.w, y), &f, 30);
-        assert!(app.touch(Touch::Up, &f, 40).is_empty(), "no reboot from a dark panel");
         assert!(!app.display_on());
+        assert!(app.touch(Touch::Up, &f, 40).is_empty());
     }
 
     #[test]

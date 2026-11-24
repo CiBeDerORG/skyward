@@ -46,8 +46,6 @@ pub struct State {
     /// partition, which erasing the logs takes in.
     pub phone_logs: usize,
     pub pattern: Vec<usize>,
-    /// How far the swipe-to-confirm knob is dragged, 0 to 1.
-    pub confirm: f32,
     pub install: Install,
     /// Where the package being installed comes from.
     pub source: Source,
@@ -218,7 +216,6 @@ impl Default for State {
             cache_partition: false,
             phone_logs: 0,
             pattern: Vec::new(),
-            confirm: 0.0,
             install: Install::Idle,
             source: Source::Computer,
             package_name: None,

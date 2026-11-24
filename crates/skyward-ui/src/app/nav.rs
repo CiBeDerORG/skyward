@@ -259,7 +259,6 @@ impl App {
             self.leave(true);
         }
         self.stack.pop();
-        self.state.confirm = 0.0;
         self.settle_page();
         self.refresh();
         // Coming back to the list of backups looks for them again: one may

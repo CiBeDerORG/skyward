@@ -293,7 +293,7 @@ impl App {
         let t = self.theme();
         let keypad = self.screen() == Screen::Decrypt && matches!(self.state.data, Data::Locked { keys: Keys::Digits, .. });
         let (r, radius) = focus::lit(&t, spot.stop, self.place(&spot, offset)?, keypad);
-        let held = matches!(self.button, Some((_, Press::Power { .. } | Press::Slide { .. })));
+        let held = matches!(self.button, Some((_, Press::Power { .. })));
         let alpha = if held || self.adjusting { LIGHT_HELD_ALPHA } else { LIGHT_ALPHA };
         Some((spot.group, r, radius, t.pal.accent.with_alpha(alpha)))
     }
@@ -438,31 +438,19 @@ mod tests {
     }
 
     #[test]
-    fn the_power_key_held_slides_a_swipe_control_and_confirms_it_let_go() {
+    fn a_short_power_press_activates_the_focused_confirmation_once_on_release() {
         let (f, i) = (fonts(), info());
         let mut app = App::new(Screen::Reboot, W, H, PPD);
         app.frame(&f, &i);
         light_on(&mut app, &f, &i, Stop::Hit(Action::Confirm(Confirm::Reboot)));
-        assert!(press(&mut app, Key::Power, 0).is_empty());
-        assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("请按住电源键"), "a short press says how");
-        app.key(Key::Power, 1000);
-        assert_eq!(app.deadline(1000), Some(1000 + CHORD_MS), "it waits for volume down first");
-        app.tick(1000 + CHORD_MS);
-        assert_eq!(app.deadline(1000 + CHORD_MS), Some(0), "then the knob moves while the key is held");
-        app.tick(1000 + SLIDE_MS / 2);
-        assert!((app.state.confirm - 0.5).abs() < 0.01, "half way after half the time: {}", app.state.confirm);
-        assert!(app.key_up(Key::Power, 1000 + SLIDE_MS / 2).is_empty(), "let go short of the end, nothing happens");
-        assert_eq!(app.state.confirm, 0.0, "and the knob goes back");
-        app.key(Key::Power, 3000);
-        app.tick(3000 + SLIDE_MS * 2);
-        assert_eq!(app.state.confirm, 1.0, "the knob stops at the end");
-        assert_eq!(app.key_up(Key::Power, 3000 + SLIDE_MS * 2), vec![Effect::Reboot(TARGETS[0])], "let go there, it confirms");
-        assert_eq!(app.state.confirm, 0.0);
-        app.key(Key::Power, 6000);
-        app.tick(6000 + SLIDE_MS);
-        app.touch(Touch::Down(W as f32 / 2.0, 200.0), &f, 6000 + SLIDE_MS);
-        assert_eq!(app.state.confirm, 0.0, "a touch lets the knob go");
-        assert!(app.key_up(Key::Power, 6000 + SLIDE_MS).is_empty(), "and the key comes up to nothing");
+        assert!(app.key(Key::Power, 1000).is_empty());
+        assert_eq!(app.key_up(Key::Power, 1050), vec![Effect::Reboot(TARGETS[0])]);
+        assert!(app.key_up(Key::Power, 1051).is_empty());
+
+        assert!(app.key(Key::Power, 2000).is_empty());
+        app.tick(2000 + CHORD_MS);
+        app.touch(Touch::Down(W as f32 / 2.0, 200.0), &f, 2010 + CHORD_MS);
+        assert!(app.key_up(Key::Power, 2020 + CHORD_MS).is_empty(), "touching the screen cancels the held key");
     }
 
     #[test]

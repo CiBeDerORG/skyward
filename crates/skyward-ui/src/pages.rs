@@ -112,33 +112,12 @@ pub fn render(screen: Screen, cx: &Ctx) -> Frame {
     }
 }
 
-/// Label and colour of each swipe-to-confirm control: the filesystem
-/// page's as `s` says what it is to do.
-pub fn confirm_label(which: Confirm, s: &State) -> (&'static str, bool) {
-    use texts::confirm;
-    let (label, danger) = match which {
-        Confirm::Filesystem => match s.fs_action {
-            FsAction::Repair => (confirm::REPAIR, true),
-            FsAction::Remake(_) => (confirm::CHANGE, true),
-        },
-        Confirm::Reboot => (confirm::REBOOT, false),
-        Confirm::Wipe => (confirm::WIPE, true),
-        Confirm::Flash => (confirm::FLASH, true),
-        Confirm::Backup => (confirm::BACK_UP, false),
-        Confirm::Restore => (confirm::RESTORE, true),
-        Confirm::Slot => (confirm::SWITCH, true),
-        Confirm::FactoryReset => (confirm::FACTORY_RESET, true),
-        Confirm::DeleteEntry | Confirm::DeleteBackup => (confirm::DELETE, true),
-        Confirm::Install => (confirm::INSTALL, false),
-        Confirm::InstallWipe => (confirm::INSTALL_AND_WIPE, true),
-        Confirm::RunScript => (confirm::INSTALL, true),
-        Confirm::Merge => (confirm::MERGE, true),
-        Confirm::Relabel => (confirm::FIX, true),
-        Confirm::SwitchSystem(_) => (confirm::SWITCH_AND_REBOOT, false),
-        Confirm::RemoveSystem(_) => (confirm::REMOVE, true),
-        Confirm::InstallSystem => (confirm::INSTALL, false),
-    };
-    (s.lang.pick(label), danger)
+/// Draw the confirmation button and register the same rectangle for touch and key focus.
+fn confirm_button(cx: &Ctx, c: &mut Canvas, hits: &mut Vec<Hit>, top: f32, which: Confirm, label: &str, danger: bool) -> Rect {
+    let action = Action::Confirm(which);
+    let rect = widgets::action_button(c, cx.t, cx.f, top, label, danger, cx.state.held == Some(action));
+    hits.push(Hit { rect, action });
+    rect
 }
 
 /// The home page's large title.
@@ -731,7 +710,7 @@ fn code(cx: &Ctx, mut c: Canvas, user: u32, keys: Keys, checking: bool) -> Frame
     Frame { header: false, pattern, ..Frame::new(t, c, out, l.pick(texts::page::DECRYPT), 0.0) }
 }
 
-/// Reboot target picker with a swipe-to-confirm control.
+/// Reboot target picker with a confirmation button.
 pub fn reboot(cx: &Ctx) -> Frame {
     let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
     let mut c = page(cx);
@@ -765,9 +744,7 @@ pub fn reboot(cx: &Ctx) -> Frame {
         out.extend(hits(&slots.rows, &[Action::Open(Screen::Slot)]));
         y = slots.bottom;
     }
-    let (label, danger) = confirm_label(Confirm::Reboot, cx.state);
-    let track = widgets::confirm(&mut c, t, f, y + t.m.dp(28.0), label, danger, s.confirm);
-    out.push(Hit { rect: track, action: Action::Confirm(Confirm::Reboot) });
+    confirm_button(cx, &mut c, &mut out, y + t.m.dp(28.0), Confirm::Reboot, l.pick(texts::confirm::REBOOT), false);
     Frame::new(t, c, out, l.pick(texts::page::REBOOT), top)
 }
 
@@ -1089,15 +1066,13 @@ pub fn installing(cx: &Ctx) -> Frame {
                 }
                 FlashPlace::Single => parts.bottom,
             };
-            let (label, danger) = confirm_label(Confirm::Flash, cx.state);
-            let track = widgets::confirm(&mut c, t, f, bottom + t.m.dp(28.0), label, danger, s.confirm);
-            out.push(Hit { rect: track, action: Action::Confirm(Confirm::Flash) });
+            let button = confirm_button(cx, &mut c, &mut out, bottom + t.m.dp(28.0), Confirm::Flash, l.pick(texts::confirm::FLASH), true);
             let note = l.pick(match s.source {
                 Source::Computer => texts::flash::OVERWRITES_ENDS_SIDELOAD,
                 Source::Rescue => texts::flash::OVERWRITES_LEAVES_RESCUE,
                 Source::File(_) | Source::Opened { .. } | Source::Asked { .. } => texts::flash::OVERWRITES,
             });
-            widgets::footnote(&mut c, t, f, track.y + track.h, note)
+            widgets::footnote(&mut c, t, f, button.y + button.h, note)
         }
         Install::Confirming { version, wipe } => {
             use texts::installing::confirm;
@@ -1121,10 +1096,9 @@ pub fn installing(cx: &Ctx) -> Frame {
                 (title, GREEN, Icon::Install, detail, Confirm::Install)
             };
             let y = widgets::list(&mut c, t, f, top, &[standing(&title, color, icon, &detail)]).bottom;
-            let (label, danger) = confirm_label(which, cx.state);
-            let track = widgets::confirm(&mut c, t, f, y + t.m.dp(28.0), label, danger, s.confirm);
-            out.push(Hit { rect: track, action: Action::Confirm(which) });
-            widgets::footnote(&mut c, t, f, track.y + track.h, l.pick(texts::installing::CANCEL_WRITES_NOTHING))
+            let label = l.pick(if *wipe { texts::confirm::INSTALL_AND_WIPE } else { texts::confirm::INSTALL });
+            let button = confirm_button(cx, &mut c, &mut out, y + t.m.dp(28.0), which, label, *wipe);
+            widgets::footnote(&mut c, t, f, button.y + button.h, l.pick(texts::installing::CANCEL_WRITES_NOTHING))
         }
         Install::Updating { version, stage, overwriting } => {
             let title = match version {
@@ -1183,10 +1157,8 @@ pub fn installing(cx: &Ctx) -> Frame {
             let picks: Vec<Action> = (0..choice.sizes.len()).map(Action::SystemSize).collect();
             out.extend(hits(&list.rows, &picks));
             let y = widgets::footnote(&mut c, t, f, list.bottom, l.pick(texts::installing::ROOM_NOTE));
-            let (label, danger) = confirm_label(Confirm::InstallSystem, cx.state);
-            let track = widgets::confirm(&mut c, t, f, y + t.m.dp(24.0), label, danger, s.confirm);
-            out.push(Hit { rect: track, action: Action::Confirm(Confirm::InstallSystem) });
-            widgets::footnote(&mut c, t, f, track.y + track.h, l.pick(texts::installing::CANCEL_WRITES_NOTHING))
+            let button = confirm_button(cx, &mut c, &mut out, y + t.m.dp(24.0), Confirm::InstallSystem, l.pick(texts::confirm::INSTALL), false);
+            widgets::footnote(&mut c, t, f, button.y + button.h, l.pick(texts::installing::CANCEL_WRITES_NOTHING))
         }
         Install::Systeming { name, stage } => {
             let (detail, done) = system_stage(l, stage.as_ref());
@@ -1200,10 +1172,8 @@ pub fn installing(cx: &Ctx) -> Frame {
             if let Some(note) = fmt::snapshot_script_note(l, &i.snapshot) {
                 y = widgets::footnote(&mut c, t, f, y, note);
             }
-            let (label, danger) = confirm_label(Confirm::RunScript, cx.state);
-            let track = widgets::confirm(&mut c, t, f, y + t.m.dp(28.0), label, danger, s.confirm);
-            out.push(Hit { rect: track, action: Action::Confirm(Confirm::RunScript) });
-            widgets::footnote(&mut c, t, f, track.y + track.h, l.pick(texts::installing::CANCEL_RUNS_NOTHING))
+            let button = confirm_button(cx, &mut c, &mut out, y + t.m.dp(28.0), Confirm::RunScript, l.pick(texts::confirm::INSTALL), true);
+            widgets::footnote(&mut c, t, f, button.y + button.h, l.pick(texts::installing::CANCEL_RUNS_NOTHING))
         }
         Install::Scripting { stage, .. } => {
             let (detail, done) = script_stage(l, stage.as_ref(), &s.script_output);
@@ -1425,7 +1395,7 @@ fn wipe_row(w: Wipe, s: &State) -> (&'static str, String) {
 
 /// What to erase: everything, as a factory reset does, or parts of it on
 /// their own, the cache partition among them where the phone has one; then
-/// a swipe erases what is chosen.
+/// the button erases what is chosen.
 pub fn wipe(cx: &Ctx) -> Frame {
     let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
     let chosen = |w: Wipe| s.wipe[WIPES.iter().position(|&x| x == w).expect("every choice is one of WIPES")];
@@ -1451,10 +1421,8 @@ pub fn wipe(cx: &Ctx) -> Frame {
         y = list.bottom;
     }
     let y = widgets::footnote(&mut c, t, f, y, l.pick(texts::wipe::NOTE));
-    let (label, danger) = confirm_label(Confirm::Wipe, cx.state);
-    let track = widgets::confirm(&mut c, t, f, y + t.m.dp(24.0), label, danger, s.confirm);
-    out.push(Hit { rect: track, action: Action::Confirm(Confirm::Wipe) });
-    Frame::new(t, fit(c, t, track.y + track.h), out, l.pick(texts::page::WIPE), top)
+    let button = confirm_button(cx, &mut c, &mut out, y + t.m.dp(24.0), Confirm::Wipe, l.pick(texts::confirm::WIPE), true);
+    Frame::new(t, fit(c, t, button.y + button.h), out, l.pick(texts::page::WIPE), top)
 }
 
 /// A page laid out above the on-screen keyboard: where the keyboard's top
@@ -1550,10 +1518,8 @@ pub fn backup(cx: &Ctx) -> Frame {
     ]);
     out.extend(hits(&options.rows, &[Action::Toggle(Switch::Compress), Action::Toggle(Switch::Verify)]));
     let y = widgets::footnote(&mut c, t, f, options.bottom, l.pick(texts::backup::NOTE));
-    let (label, danger) = confirm_label(Confirm::Backup, cx.state);
-    let track = widgets::confirm(&mut c, t, f, y + t.m.dp(24.0), label, danger, s.confirm);
-    out.push(Hit { rect: track, action: Action::Confirm(Confirm::Backup) });
-    Frame::new(t, fit(c, t, track.y + track.h), out, l.pick(texts::page::BACKUP), top)
+    let button = confirm_button(cx, &mut c, &mut out, y + t.m.dp(24.0), Confirm::Backup, l.pick(texts::confirm::BACK_UP), false);
+    Frame::new(t, fit(c, t, button.y + button.h), out, l.pick(texts::page::BACKUP), top)
 }
 
 /// The backups found, newest first, to restore one; those that cannot be
@@ -1636,10 +1602,8 @@ pub fn restore_backup(cx: &Ctx) -> Frame {
                 {
                     y = widgets::footnote(&mut c, t, f, y, &texts::restore::other_version(l, was, now));
                 }
-                let (label, danger) = confirm_label(Confirm::Restore, cx.state);
-                let track = widgets::confirm(&mut c, t, f, y + t.m.dp(24.0), label, danger, s.confirm);
-                out.push(Hit { rect: track, action: Action::Confirm(Confirm::Restore) });
-                track.y + track.h
+                let button = confirm_button(cx, &mut c, &mut out, y + t.m.dp(24.0), Confirm::Restore, l.pick(texts::confirm::RESTORE), true);
+                button.y + button.h
             }
         }
     };
@@ -1648,10 +1612,8 @@ pub fn restore_backup(cx: &Ctx) -> Frame {
     let mut bottom = delete.bottom;
     if s.asking_delete {
         let y = widgets::footnote(&mut c, t, f, delete.bottom, l.pick(texts::restore::ASK_DELETE));
-        let (label, danger) = confirm_label(Confirm::DeleteBackup, cx.state);
-        let track = widgets::confirm(&mut c, t, f, y + t.m.dp(24.0), label, danger, s.confirm);
-        out.push(Hit { rect: track, action: Action::Confirm(Confirm::DeleteBackup) });
-        bottom = track.y + track.h;
+        let button = confirm_button(cx, &mut c, &mut out, y + t.m.dp(24.0), Confirm::DeleteBackup, l.pick(texts::confirm::DELETE), true);
+        bottom = button.y + button.h;
     }
     Frame::new(t, fit(c, t, bottom), out, l.pick(texts::restore::TITLE), top)
 }
@@ -1910,7 +1872,7 @@ pub fn advanced(cx: &Ctx) -> Frame {
 }
 
 /// Giving the data partition's files the SELinux labels the installed
-/// system's rules give them: what it does, and a swipe to start it; then
+/// system's rules give them: what it does, and a button to start it; then
 /// how far it has come, a way to stop it, and how it ended.
 pub fn relabel(cx: &Ctx) -> Frame {
     let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
@@ -1928,9 +1890,7 @@ pub fn relabel(cx: &Ctx) -> Frame {
         if let Some(note) = note {
             y = widgets::footnote(&mut c, t, f, y, l.pick(note));
         }
-        let (label, danger) = confirm_label(Confirm::Relabel, cx.state);
-        let track = widgets::confirm(&mut c, t, f, y + t.m.dp(24.0), label, danger, s.confirm);
-        out.push(Hit { rect: track, action: Action::Confirm(Confirm::Relabel) });
+        confirm_button(cx, &mut c, &mut out, y + t.m.dp(24.0), Confirm::Relabel, l.pick(texts::confirm::FIX), true);
         return Frame::new(t, c, out, title, top);
     };
     let repair = Verb::of(&crate::app::PartKind::Repair);
@@ -2006,7 +1966,7 @@ fn fs_held(l: Lang, row: &FsRow, data: &Data) -> String {
     }
 }
 
-/// One partition: what it holds, what can be done to it, and a swipe to do
+/// One partition: what it holds, what can be done to it, and a button to do
 /// what is chosen.
 pub fn filesystem(cx: &Ctx) -> Frame {
     let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
@@ -2047,10 +2007,9 @@ pub fn filesystem(cx: &Ctx) -> Frame {
     if !row.others.is_empty() {
         y = widgets::footnote(&mut c, t, f, y, l.pick(texts::filesystems::CANT_UNDO));
     }
-    let (label, danger) = confirm_label(Confirm::Filesystem, s);
-    let track = widgets::confirm(&mut c, t, f, y + t.m.dp(24.0), label, danger, s.confirm);
-    out.push(Hit { rect: track, action: Action::Confirm(Confirm::Filesystem) });
-    Frame::new(t, fit(c, t, track.y + track.h), out, partition_title(l, &row.name), top)
+    let label = l.pick(match s.fs_action { FsAction::Repair => texts::confirm::REPAIR, FsAction::Remake(_) => texts::confirm::CHANGE });
+    let button = confirm_button(cx, &mut c, &mut out, y + t.m.dp(24.0), Confirm::Filesystem, label, true);
+    Frame::new(t, fit(c, t, button.y + button.h), out, partition_title(l, &row.name), top)
 }
 
 /// The title of the page of a partition the filesystem page lists.
@@ -2193,7 +2152,7 @@ pub fn part_work(cx: &Ctx) -> Frame {
 /// The system on the phone now; the newest system the phone maker's
 /// server knows, and downloading its full package to install it; and
 /// where an update the system installed stands, merging it into the slot it
-/// went to: how far a merge under way has come, and a swipe to merge one
+/// went to: how far a merge under way has come, and a button to merge one
 /// that waits there for the system to start it.
 pub fn update(cx: &Ctx) -> Frame {
     let (t, f, s, i, l) = (cx.t, cx.f, cx.state, cx.info, cx.state.lang);
@@ -2236,10 +2195,8 @@ pub fn update(cx: &Ctx) -> Frame {
     y = if y == top { widgets::section_first(&mut c, t, f, y, merging) } else { widgets::section(&mut c, t, f, y, merging) };
     y = widgets::list(&mut c, t, f, y, &[row]).bottom;
     if s.update == Standing::Waiting {
-        let (label, danger) = confirm_label(Confirm::Merge, cx.state);
-        let track = widgets::confirm(&mut c, t, f, y + t.m.dp(28.0), label, danger, s.confirm);
-        out.push(Hit { rect: track, action: Action::Confirm(Confirm::Merge) });
-        y = widgets::footnote(&mut c, t, f, track.y + track.h, l.pick(texts::update::CANT_GO_BACK));
+        let button = confirm_button(cx, &mut c, &mut out, y + t.m.dp(28.0), Confirm::Merge, l.pick(texts::confirm::MERGE), true);
+        y = widgets::footnote(&mut c, t, f, button.y + button.h, l.pick(texts::update::CANT_GO_BACK));
     }
     Frame::new(t, fit(c, t, y), out, l.pick(texts::page::UPDATE), top)
 }
@@ -2735,7 +2692,7 @@ pub fn row(screen: Screen, cx: &Ctx, i: usize, c: &mut Canvas) {
 }
 
 /// One entry of a folder, a file or a folder: what it is, and what can be
-/// done with it. Deleting asks first, with a swipe.
+/// done with it. Deleting requires confirmation.
 pub fn file_info(cx: &Ctx) -> Frame {
     let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
     let e = s.file.as_ref().expect("the file page shows an entry");
@@ -2788,10 +2745,8 @@ pub fn file_info(cx: &Ctx) -> Frame {
             false => texts::files::ask_delete(l, &e.name),
         };
         let y = widgets::footnote(&mut c, t, f, actions.bottom, &what);
-        let (label, danger) = confirm_label(Confirm::DeleteEntry, cx.state);
-        let track = widgets::confirm(&mut c, t, f, y + t.m.dp(24.0), label, danger, s.confirm);
-        out.push(Hit { rect: track, action: Action::Confirm(Confirm::DeleteEntry) });
-        bottom = track.y + track.h;
+        let button = confirm_button(cx, &mut c, &mut out, y + t.m.dp(24.0), Confirm::DeleteEntry, l.pick(texts::confirm::DELETE), true);
+        bottom = button.y + button.h;
     }
     let title = l.pick(if folder { texts::files::FOLDER_INFO } else { texts::files::FILE_INFO });
     Frame::new(t, fit(c, t, bottom), out, title, top)
@@ -3151,9 +3106,7 @@ pub fn slot(cx: &Ctx) -> Frame {
         return Frame::new(t, c, out, title, top);
     }
     let y = widgets::footnote(&mut c, t, f, list.bottom, l.pick(texts::slot::SWITCH_NOTE));
-    let (label, danger) = confirm_label(Confirm::Slot, cx.state);
-    let track = widgets::confirm(&mut c, t, f, y + t.m.dp(24.0), label, danger, s.confirm);
-    out.push(Hit { rect: track, action: Action::Confirm(Confirm::Slot) });
+    confirm_button(cx, &mut c, &mut out, y + t.m.dp(24.0), Confirm::Slot, l.pick(texts::confirm::SWITCH), true);
     Frame::new(t, c, out, title, top)
 }
 
@@ -3249,10 +3202,9 @@ pub fn systems(cx: &Ctx) -> Frame {
         match (chosen, fmt::snapshot_system_note(l, &i.snapshot)) {
             (Who::Guest(_), Some(note)) => y = widgets::footnote(&mut c, t, f, y, note),
             _ => {
-                let (label, danger) = confirm_label(Confirm::SwitchSystem(chosen), s);
-                let track = widgets::confirm(&mut c, t, f, y + t.m.dp(12.0), label, danger, s.confirm);
-                out.push(Hit { rect: track, action: Action::Confirm(Confirm::SwitchSystem(chosen)) });
-                y = track.y + track.h;
+                let name = selected_guest.map_or(systems.installed.name.as_str(), |other| other.name.as_str());
+                let button = confirm_button(cx, &mut c, &mut out, y + t.m.dp(12.0), Confirm::SwitchSystem(chosen), &texts::confirm::switch_and_reboot(l, name), false);
+                y = button.y + button.h;
             }
         }
     }
@@ -3277,10 +3229,8 @@ pub fn systems(cx: &Ctx) -> Frame {
                 let prompt = if chosen == starts { texts::systems::ASK_REMOVE_RUNNING } else { texts::systems::ASK_REMOVE };
                 let y2 = widgets::footnote(&mut c, t, f, y, &format!("{target}\n{}", l.pick(prompt)));
                 let which = Confirm::RemoveSystem(other.id);
-                let (label, danger) = confirm_label(which, s);
-                let track = widgets::confirm(&mut c, t, f, y2 + t.m.dp(24.0), label, danger, s.confirm);
-                out.push(Hit { rect: track, action: Action::Confirm(which) });
-                y = track.y + track.h;
+                let button = confirm_button(cx, &mut c, &mut out, y2 + t.m.dp(24.0), which, &texts::confirm::remove_named(l, &other.name), true);
+                y = button.y + button.h;
             }
         }
     }
@@ -3438,9 +3388,7 @@ pub fn cant_start(cx: &Ctx) -> Frame {
     let choices = widgets::list(&mut c, t, f, y, &rows);
     out.extend(hits(&choices.rows, &[Action::RebootTo(Target::System), Action::Dismiss]));
     let y = widgets::footnote(&mut c, t, f, choices.bottom, l.pick(texts::cant_start::CANT_UNDO));
-    let (label, danger) = confirm_label(Confirm::FactoryReset, cx.state);
-    let track = widgets::confirm(&mut c, t, f, y + t.m.dp(24.0), label, danger, s.confirm);
-    out.push(Hit { rect: track, action: Action::Confirm(Confirm::FactoryReset) });
+    confirm_button(cx, &mut c, &mut out, y + t.m.dp(24.0), Confirm::FactoryReset, l.pick(texts::confirm::FACTORY_RESET), true);
     Frame { back: false, ..Frame::new(t, c, out, l.pick(texts::cant_start::TITLE), top) }
 }
 

@@ -215,15 +215,9 @@ pub(super) fn light_on(app: &mut App, f: &Fonts, i: &DeviceInfo, stop: Stop) {
     panic!("the keys never came to {stop:?}");
 }
 
-/// Drag the knob of a swipe-to-confirm track all the way across.
-pub(super) fn swipe(app: &mut App, f: &Fonts, i: &DeviceInfo, which: Confirm) -> Vec<Effect> {
-    let track = app.frame(f, i).hits.iter().find(|h| h.action == Action::Confirm(which)).expect("the track is on the page").rect;
-    let y = track.centre().1 - app.top().1;
-    let mut fx = app.touch(Touch::Down(track.x + track.h / 2.0, y), f, 0);
-    fx.extend(app.touch(Touch::Move(track.x + track.w / 2.0, y), f, 0));
-    fx.extend(app.touch(Touch::Move(track.x + track.w, y), f, 0));
-    fx.extend(app.touch(Touch::Up, f, 0));
-    fx
+/// Tap the confirmation button for an action on the current page.
+pub(super) fn tap_confirm(app: &mut App, f: &Fonts, i: &DeviceInfo, which: Confirm) -> Vec<Effect> {
+    tap(app, f, i, Action::Confirm(which))
 }
 
 /// Type `text` on the keyboard of the page showing, one tap a key, in

@@ -313,7 +313,6 @@ impl App {
             Screen::RestoreBackup if gone => {
                 self.state.restore = None;
                 self.state.asking_delete = false;
-                self.state.confirm = 0.0;
                 self.leave(true);
                 self.stack.pop();
                 self.settle_page();
@@ -611,13 +610,13 @@ mod tests {
     }
 
     #[test]
-    fn deleting_asks_with_a_swipe_and_runs_on_its_page() {
+    fn deleting_asks_for_confirmation_and_runs_on_its_page() {
         let (f, i) = (fonts(), info());
         let mut app = in_sdcard(&f, &i);
         hold_entry(&mut app, &f, &i, 1);
         assert!(app.frame(&f, &i).hits.iter().all(|h| h.action != Action::Confirm(Confirm::DeleteEntry)));
         tap(&mut app, &f, &i, Action::AskDelete);
-        assert_eq!(swipe(&mut app, &f, &i, Confirm::DeleteEntry), vec![Effect::Delete("/sdcard/a.zip".into())]);
+        assert_eq!(tap_confirm(&mut app, &f, &i, Confirm::DeleteEntry), vec![Effect::Delete("/sdcard/a.zip".into())]);
         app.file_job_started(FileTask::Delete { path: "/sdcard/a.zip".into() });
         assert_eq!(app.screen(), Screen::FileJob);
         assert_eq!(tap(&mut app, &f, &i, Action::StopJob), vec![Effect::StopJob]);

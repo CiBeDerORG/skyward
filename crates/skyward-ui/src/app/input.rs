@@ -117,10 +117,6 @@ impl App {
                         self.set_slider(&t, which, track, x);
                         Drag::Slider(which, track)
                     }
-                    Some((Action::Confirm(which), track)) if self.on_knob(track, x) => {
-                        let knob_x = track.x + (track.w - track.h) * self.state.confirm;
-                        Drag::Confirm { which, track, grab: x - knob_x }
-                    }
                     Some((Action::Pattern, _)) => {
                         self.state.pattern.clear();
                         self.trace(&t, x, y + scroll);
@@ -158,6 +154,8 @@ impl App {
                                 Drag::Scroll { last: y }
                             }
                         }
+                        _ if let Some(a @ Action::Confirm(_)) = action
+                            && (dx.abs() > slop || !self.confirm_at(a, x, y, scroll)) => Drag::Held,
                         _ => Drag::Press { x: x0, y: y0, action, edge: at_edge, at },
                     };
                     if !matches!(self.drag, Drag::Press { .. }) {
@@ -184,12 +182,6 @@ impl App {
                     self.set_slider(&t, which, track, x);
                     self.drag = Drag::Slider(which, track);
                 }
-                Drag::Confirm { which, track, grab } => {
-                    let travel = (track.w - track.h).max(1.0);
-                    self.state.confirm = ((x - grab - track.x) / travel).clamp(0.0, 1.0);
-                    self.repaint_confirm(&t, f, which, track);
-                    self.drag = Drag::Confirm { which, track, grab };
-                }
                 Drag::Pattern => {
                     self.trace(&t, x, y + scroll);
                     self.drag = Drag::Pattern;
@@ -203,6 +195,7 @@ impl App {
                 Drag::Idle => {}
             },
             Touch::Up => match std::mem::replace(&mut self.drag, Drag::Idle) {
+                Drag::Press { action: Some(a @ Action::Confirm(_)), x, y, .. } if !self.confirm_at(a, x, y, scroll) => {}
                 Drag::Press { action: Some(a), .. } => {
                     if let Some(p) = &mut self.row_press {
                         p.lift(now);
@@ -250,14 +243,6 @@ impl App {
                     self.cue = Some((from_left, cy, Spring::new(now, depth, 0.0, 0.15)));
                     self.dirty = true;
                 }
-                Drag::Confirm { which, track, .. } => {
-                    let done = self.state.confirm > SLID;
-                    self.state.confirm = 0.0;
-                    self.repaint_confirm(&t, f, which, track);
-                    if done {
-                        fx.extend(self.confirmed(which, now));
-                    }
-                }
                 Drag::Pattern => fx.extend(self.drawn(now)),
                 // Let go, the strength slider taps the motor as strongly as
                 // it was left at.
@@ -271,7 +256,7 @@ impl App {
         // A key of the on-screen keyboard, or a choice of a list open over
         // the page, shows held down while the finger rests on it.
         let held = match self.drag {
-            Drag::Press { action: Some(a @ (Action::Type(_) | Action::PickSecurity(_))), .. } => Some(a),
+            Drag::Press { action: Some(a @ (Action::Type(_) | Action::PickSecurity(_) | Action::Confirm(_))), .. } => Some(a),
             _ => None,
         };
         if held != self.state.held {
@@ -287,6 +272,13 @@ impl App {
             }
         }
         fx
+    }
+
+    /// A confirmation must still be visible under the finger when released.
+    fn confirm_at(&self, action: Action, x: f32, y: f32, scroll: f32) -> bool {
+        self.frame.as_ref().is_some_and(|fr| {
+            fr.hit(x, y + scroll).is_some_and(|hit| hit.action == action && fr.shown(hit.rect, scroll).is_some_and(|r| r.contains(x, y)))
+        })
     }
 
     /// The button a finger holds down, which shows held at once: `<`, the
@@ -416,11 +408,6 @@ impl App {
             Key::Power => {
                 self.dirty = true;
                 match self.keys.then(|| self.lit()).flatten() {
-                    // Held on a swipe-to-confirm control, the key slides
-                    // its knob along as a finger would.
-                    Some(Spot { stop: Stop::Hit(Action::Confirm(which)), rect, .. }) => {
-                        self.button = Some((key, Press::Slide { which, track: rect, at }))
-                    }
                     Some(spot) => self.button = Some((key, Press::Power { spot, at })),
                     // Turning the screen off, the key ticks the motor.
                     None => {
@@ -435,7 +422,7 @@ impl App {
     }
 
     /// A button came back up: the power key works the control it went down
-    /// on, or confirms with the knob it slid far enough. Let go before its
+    /// on. Let go before its
     /// partner in a screenshot came, the key waiting for it first does what
     /// it does alone.
     pub fn key_up(&mut self, key: Key, now: u64) -> Vec<Effect> {
@@ -450,58 +437,17 @@ impl App {
         self.button = None;
         self.dirty = true;
         match press {
+            Press::Power { spot, .. } if matches!(spot.stop, Stop::Hit(Action::Confirm(_))) && self.lit() != Some(spot) => {}
             Press::Power { spot, .. } => fx.extend(self.work(spot, now)),
-            Press::Slide { which, track, .. } => {
-                let done = self.state.confirm > SLID;
-                self.let_knob_go(which, track);
-                if done {
-                    fx.extend(self.confirmed(which, now));
-                } else {
-                    self.say(self.state.lang.pick(texts::toast::HOLD_POWER), now);
-                }
-            }
             Press::Volume { .. } | Press::Spent => {}
         }
         fx
     }
 
-    /// Whatever the button held down was doing comes to nothing until it is
-    /// let go: a knob it slid goes back.
+    /// Cancel the held key until it is released.
     pub(super) fn drop_button(&mut self) {
-        let Some((key, press)) = self.button else { return };
-        if let Press::Slide { which, track, .. } = press {
-            self.let_knob_go(which, track);
-        }
+        let Some((key, _)) = self.button else { return };
         self.button = Some((key, Press::Spent));
-    }
-
-    /// Let go of a swipe-to-confirm control's knob, which goes back to the
-    /// start of its track.
-    fn let_knob_go(&mut self, which: Confirm, track: Rect) {
-        self.state.confirm = 0.0;
-        self.knob = Some((which, track));
-        self.dirty = true;
-    }
-
-    fn on_knob(&self, track: Rect, x: f32) -> bool {
-        let knob_x = track.x + (track.w - track.h) * self.state.confirm;
-        x >= knob_x && x <= knob_x + track.h
-    }
-
-    fn repaint_confirm(&mut self, t: &Theme, f: &Fonts, which: Confirm, track: Rect) {
-        self.paint_knob(t, f, which, track);
-        self.dirty = true;
-    }
-
-    /// Draw the swipe-to-confirm control at `track` on the page again, its
-    /// knob where it has come to.
-    pub(super) fn paint_knob(&mut self, t: &Theme, f: &Fonts, which: Confirm, track: Rect) {
-        let (label, danger) = pages::confirm_label(which, &self.state);
-        if let Some(fr) = self.frame.as_mut() {
-            fr.canvas.fill_rect(track.x, track.y, track.w, track.h, t.pal.bg);
-            widgets::confirm(&mut fr.canvas, t, f, track.y, label, danger, self.state.confirm);
-        }
-        self.layer = None;
     }
 }
 

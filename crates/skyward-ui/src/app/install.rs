@@ -347,7 +347,7 @@ mod tests {
     }
 
     #[test]
-    fn an_image_goes_where_it_is_sent_once_swiped() {
+    fn an_image_goes_where_it_is_sent_once_confirmed() {
         let (f, i) = (fonts(), info());
         let mut app = sideloading(&f, &i);
         app.install(Event::Checking { size: 201_326_592 }, 0);
@@ -357,7 +357,7 @@ mod tests {
         // guard.
         tap_at(&mut app, &f, &i, Action::FlashPartition(1), 1000);
         tap_at(&mut app, &f, &i, Action::FlashSlots(Pick::Both), 1000);
-        assert_eq!(swipe_to_flash(&mut app, &f, &i), vec![Effect::Flash { partition: "boot".into(), place: FlashPlace::Slotted, pick: Pick::Both }]);
+        assert_eq!(tap_at(&mut app, &f, &i, Action::Confirm(Confirm::Flash), 1000), vec![Effect::Flash { partition: "boot".into(), place: FlashPlace::Slotted, pick: Pick::Both }]);
         assert_eq!(app.state.install, Install::Flashing { partition: "boot".into(), stage: None });
         app.install(Event::Progress(Stage::Flashing { done: 10, total: 40 }), 1000);
         assert_eq!(app.state.install, Install::Flashing { partition: "boot".into(), stage: Some(Stage::Flashing { done: 10, total: 40 }) });
@@ -409,14 +409,6 @@ mod tests {
 
     /// Swipe the flash page's track to its end, at a time past the wake
     /// guard, and give what the page asks for.
-    fn swipe_to_flash(app: &mut App, f: &Fonts, i: &DeviceInfo) -> Vec<Effect> {
-        let track = app.frame(f, i).hits.iter().find(|h| h.action == Action::Confirm(Confirm::Flash)).unwrap().rect;
-        let y = track.centre().1 - app.top().1;
-        app.touch(Touch::Down(track.x + track.h / 2.0, y), f, 1000);
-        app.touch(Touch::Move(track.x + track.w, y), f, 1000);
-        app.touch(Touch::Up, f, 1000)
-    }
-
     #[test]
     fn a_filesystem_image_goes_to_a_logical_partition_of_the_slot_the_phone_runs_from() {
         let (f, i) = (fonts(), info());
@@ -433,7 +425,7 @@ mod tests {
         tap_at(&mut app, &f, &i, Action::FlashSlots(Pick::Both), 1000);
         tap_at(&mut app, &f, &i, Action::FlashPartition(2), 1000);
         assert_eq!(picks(&mut app), 0, "a logical partition is the running slot's, with nothing to pick");
-        assert_eq!(swipe_to_flash(&mut app, &f, &i), vec![Effect::Flash { partition: "vendor".into(), place: FlashPlace::Logical, pick: Pick::Both }]);
+        assert_eq!(tap_at(&mut app, &f, &i, Action::Confirm(Confirm::Flash), 1000), vec![Effect::Flash { partition: "vendor".into(), place: FlashPlace::Logical, pick: Pick::Both }]);
         assert_eq!(Pick::Both.slots(FlashPlace::Logical, Slot::B), [Slot::B], "whatever was picked for another partition");
         assert_eq!(Pick::Other.slots(FlashPlace::Slotted, Slot::B), [Slot::A]);
         assert!(Pick::Current.slots(FlashPlace::Single, Slot::A).is_empty(), "super is in no slot");
@@ -454,7 +446,7 @@ mod tests {
         let partitions = vec![FlashTarget { name: "super".into(), place: FlashPlace::Single }];
         app.install(Event::Image { kind: ImageKind::Super, size: 9_663_676_416, partitions }, 0);
         assert!(!app.frame(&f, &i).hits.iter().any(|h| matches!(h.action, Action::FlashSlots(_))));
-        assert_eq!(swipe_to_flash(&mut app, &f, &i), vec![Effect::Flash { partition: "super".into(), place: FlashPlace::Single, pick: Pick::Current }]);
+        assert_eq!(tap_at(&mut app, &f, &i, Action::Confirm(Confirm::Flash), 1000), vec![Effect::Flash { partition: "super".into(), place: FlashPlace::Single, pick: Pick::Current }]);
         app.install(Event::Finished(Outcome::Flashed { partition: "super".into(), slots: Vec::new() }), 1000);
         assert!(matches!(app.state.install, Install::Finished { damage: None, .. }));
         app.frame(&f, &i);
@@ -478,12 +470,8 @@ mod tests {
         app.install(Event::Checking { size: 7_103_043_868 }, 0);
         app.install(Event::Ready { version: Some("OS3.0.306.0.WMACNXM".into()), wipe: true }, 0);
         assert_eq!(app.state.install, Install::Confirming { version: Some("OS3.0.306.0.WMACNXM".into()), wipe: true });
-        // The question lit the panel, so the user swipes past the wake guard.
-        let track = app.frame(&f, &i).hits.iter().find(|h| h.action == Action::Confirm(Confirm::InstallWipe)).unwrap().rect;
-        let y = track.centre().1 - app.top().1;
-        app.touch(Touch::Down(track.x + track.h / 2.0, y), &f, 1000);
-        app.touch(Touch::Move(track.x + track.w, y), &f, 1000);
-        assert_eq!(app.touch(Touch::Up, &f, 1000), vec![Effect::Install]);
+        // The question lit the panel, so the user taps past the wake guard.
+        assert_eq!(tap_at(&mut app, &f, &i, Action::Confirm(Confirm::InstallWipe), 1000), vec![Effect::Install]);
         assert_eq!(app.state.install, Install::Updating { version: Some("OS3.0.306.0.WMACNXM".into()), stage: None, overwriting: false });
         app.key(Key::Back, 1000);
         assert_eq!(app.screen(), Screen::Installing, "an update being written keeps the page");
@@ -506,12 +494,8 @@ mod tests {
         assert_eq!(app.state.package_name.as_deref(), Some("rom.zip"), "the question names the file");
         app.install(Event::Script, 0);
         assert_eq!(app.state.install, Install::ConfirmingScript);
-        // The question lit the panel, so the user swipes past the wake guard.
-        let track = app.frame(&f, &i).hits.iter().find(|h| h.action == Action::Confirm(Confirm::RunScript)).unwrap().rect;
-        let y = track.centre().1 - app.top().1;
-        app.touch(Touch::Down(track.x + track.h / 2.0, y), &f, 1000);
-        app.touch(Touch::Move(track.x + track.w, y), &f, 1000);
-        assert_eq!(app.touch(Touch::Up, &f, 1000), vec![Effect::Install]);
+        // The question lit the panel, so the user taps past the wake guard.
+        assert_eq!(tap_at(&mut app, &f, &i, Action::Confirm(Confirm::RunScript), 1000), vec![Effect::Install]);
         assert_eq!(app.state.install, Install::Scripting { stage: None, running: false });
         app.install(Event::Running, 1000);
         for line in ["- Flashing boot", " ", "- Done"] {

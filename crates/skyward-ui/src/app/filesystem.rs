@@ -208,7 +208,7 @@ mod tests {
         tap(&mut app, &f, &i, Action::ChooseFs(FsChoice::Remake(0)));
         assert_eq!(app.state.fs_action, FsAction::Remake("f2fs".into()));
         let remake = Effect::Filesystem { name: "cache".into(), action: FsAction::Remake("f2fs".into()) };
-        assert_eq!(swipe(&mut app, &f, &i, Confirm::Filesystem), vec![remake]);
+        assert_eq!(tap_confirm(&mut app, &f, &i, Confirm::Filesystem), vec![remake]);
         app.part_work_started(PartKind::Remake("f2fs".into()), false);
         assert_eq!(app.screen(), Screen::PartWork);
         app.part_listed(vec!["cache".into()]);
@@ -234,12 +234,12 @@ mod tests {
         tap(&mut app, &f, &i, Action::ChooseFs(FsChoice::Repair));
         app.state.data = Data::Opening;
         app.refresh();
-        assert!(swipe(&mut app, &f, &i, Confirm::Filesystem).is_empty());
+        assert!(tap_confirm(&mut app, &f, &i, Confirm::Filesystem).is_empty());
         assert_eq!(toast(&app), Some("正在打开 data 分区，请稍后再试"));
         app.state.data = Data::Open;
         app.refresh();
         let repair = Effect::Filesystem { name: "data".into(), action: FsAction::Repair };
-        assert_eq!(swipe(&mut app, &f, &i, Confirm::Filesystem), vec![repair]);
+        assert_eq!(tap_confirm(&mut app, &f, &i, Confirm::Filesystem), vec![repair]);
         app.part_work_started(PartKind::Repair, false);
         app.part_listed(vec!["data".into()]);
         app.part_at(0);

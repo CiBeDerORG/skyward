@@ -70,29 +70,27 @@ mod tests {
     use crate::app::testing::*;
 
     #[test]
-    fn swiping_the_knob_reboots_to_the_chosen_target() {
+    fn a_tap_reboots_to_the_chosen_target_once_on_release() {
         let (f, i) = (fonts(), info());
         let mut app = App::new(Screen::Reboot, W, H, PPD);
         tap(&mut app, &f, &i, Action::RebootTarget(3));
-        let track = app.frame(&f, &i).hits.iter().find(|h| h.action == Action::Confirm(Confirm::Reboot)).unwrap().rect;
-        let y = track.centre().1;
-        app.touch(Touch::Down(track.x + track.h / 2.0, y), &f, 0);
-        app.touch(Touch::Move(track.x + track.w / 2.0, y), &f, 0);
-        app.touch(Touch::Move(track.x + track.w, y), &f, 0);
-        let fx = app.touch(Touch::Up, &f, 0);
-        assert_eq!(fx, vec![Effect::Reboot(Target::Bootloader)]);
-        assert_eq!(app.state.confirm, 0.0, "the knob springs back");
+        let (x, y) = spot(&mut app, &f, &i, Action::Confirm(Confirm::Reboot));
+        assert!(app.touch(Touch::Down(x, y), &f, 1000).is_empty());
+        assert_eq!(app.touch(Touch::Up, &f, 1060), vec![Effect::Reboot(Target::Bootloader)]);
+        assert!(app.touch(Touch::Up, &f, 1061).is_empty());
     }
 
     #[test]
-    fn letting_go_halfway_does_not_reboot() {
+    fn dragging_across_or_scrolling_from_the_button_does_not_reboot() {
         let (f, i) = (fonts(), info());
-        let mut app = App::new(Screen::Reboot, W, H, PPD);
-        let track = app.frame(&f, &i).hits.iter().find(|h| h.action == Action::Confirm(Confirm::Reboot)).unwrap().rect;
-        let y = track.centre().1;
-        app.touch(Touch::Down(track.x + track.h / 2.0, y), &f, 0);
-        app.touch(Touch::Move(track.x + track.w / 2.0, y), &f, 0);
-        assert!(app.touch(Touch::Up, &f, 0).is_empty());
+        for (dx, dy) in [(120.0, 0.0), (0.0, -120.0)] {
+            let mut app = App::new(Screen::Reboot, W, H, PPD);
+            let (x, y) = spot(&mut app, &f, &i, Action::Confirm(Confirm::Reboot));
+            assert!(app.touch(Touch::Down(x, y), &f, 1000).is_empty());
+            assert!(app.touch(Touch::Move(x + dx, y + dy), &f, 1030).is_empty());
+            assert!(app.touch(Touch::Move(x, y), &f, 1060).is_empty());
+            assert!(app.touch(Touch::Up, &f, 1090).is_empty());
+        }
     }
 
     #[test]
@@ -102,7 +100,7 @@ mod tests {
         let fastboot = TARGETS.iter().position(|t| *t == Target::Fastboot).unwrap();
         tap(&mut app, &f, &i, Action::RebootTarget(fastboot));
         assert_eq!(app.state.reboot, fastboot);
-        assert_eq!(swipe(&mut app, &f, &i, Confirm::Reboot), vec![Effect::Reboot(Target::Fastboot)]);
+        assert_eq!(tap_confirm(&mut app, &f, &i, Confirm::Reboot), vec![Effect::Reboot(Target::Fastboot)]);
     }
 
     #[test]

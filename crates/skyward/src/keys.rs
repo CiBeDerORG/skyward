@@ -123,7 +123,17 @@ fn drive(driver: &Driver, modules: &[PathBuf]) -> Result<()> {
 pub fn start(steps: &[Step], modules: &[PathBuf]) -> Result<()> {
     for step in steps {
         match step {
-            Step::Start(program) => crate::services::start(std::slice::from_ref(program.as_ref()), None)?,
+            Step::Start(program) => {
+                // Some stock recoveries run their own BootControl through init.
+                // Register the vendor implementation only if Binder still needs one.
+                if program.service.ready_service.as_deref() == Some(skyward_vab::boot::SERVICE) {
+                    let binder = skyward_binder::driver::Binder::open()?;
+                    if skyward_binder::service::find(&binder, skyward_vab::boot::SERVICE)?.is_some() {
+                        continue;
+                    }
+                }
+                crate::services::start(std::slice::from_ref(program.as_ref()), None)?;
+            }
             Step::Drive(driver) => drive(driver, modules)?,
             Step::ServeElements => {
                 let readers = skyward_omapi::start()?;

@@ -1417,9 +1417,17 @@ fn draw_text_field(c: &mut Canvas, t: &Theme, f: &Fonts, x0: f32, top: f32, text
 /// A full-width button in the accent colour, for a page's one action that
 /// destroys nothing. Returns its rect.
 pub fn button(c: &mut Canvas, t: &Theme, f: &Fonts, top: f32, label: &str) -> Rect {
+    action_button(c, t, f, top, label, false, false)
+}
+
+/// A page action, with a distinct colour for destructive operations and feedback while held.
+pub fn action_button(c: &mut Canvas, t: &Theme, f: &Fonts, top: f32, label: &str, danger: bool, held: bool) -> Rect {
     let m = &t.m;
     let (x, w, h) = (m.margin, m.w as f32 - m.margin * 2.0, m.dp(48.0));
-    c.fill_round_rect(x, top, w, h, h / 2.0, t.pal.accent);
+    c.fill_round_rect(x, top, w, h, h / 2.0, if danger { t.pal.danger } else { t.pal.accent });
+    if held {
+        c.fill_round_rect(x, top, w, h, h / 2.0, t.pal.button_press);
+    }
     c.text_center_in(&f.heading, label, x + w / 2.0, top + h / 2.0, m.row_title_px, Rgba::rgb(255, 255, 255), w - h / 2.0);
     Rect::new(x, top, w, h)
 }
@@ -1954,29 +1962,6 @@ pub fn slider_card(c: &mut Canvas, t: &Theme, f: &Fonts, top: f32, caption: Capt
         below_rect = Some(Rect::new(card_x, y, right - card_x, l.h));
     }
     SliderBlock { bottom: top + h, track, below: below_rect }
-}
-
-/// Swipe-to-confirm control in the thick-slider style; `progress` (0 to 1)
-/// is how far the knob has been dragged. Returns the track.
-pub fn confirm(c: &mut Canvas, t: &Theme, f: &Fonts, top: f32, label: &str, danger: bool, progress: f32) -> Rect {
-    let m = &t.m;
-    let accent = if danger { t.pal.danger } else { t.pal.accent };
-    let (x, w, h) = (m.margin, m.w as f32 - m.margin * 2.0, m.dp(56.0));
-    c.fill_round_rect(x, top, w, h, h / 2.0, if danger { t.pal.danger_soft } else { t.pal.badge });
-    // The label stands between the knob at rest and the track's end.
-    c.text_center_in(&f.heading, label, x + w / 2.0 + h / 4.0, top + h / 2.0, m.row_title_px, accent, w - h * 2.0);
-    let k = h - m.dp(8.0);
-    let kcx = x + h / 2.0 + (w - h) * progress.clamp(0.0, 1.0);
-    let kcy = top + h / 2.0;
-    if progress > 0.0 {
-        c.fill_round_rect(x, top, kcx + h / 2.0 - x, h, h / 2.0, accent.with_alpha(60));
-    }
-    c.fill_circle(kcx, kcy, k / 2.0, accent);
-    let s = k * 0.3;
-    c.line(kcx - s * 0.5, kcy, kcx + s * 0.5, kcy, m.stroke, Rgba::rgb(255, 255, 255));
-    c.line(kcx + s * 0.5, kcy, kcx + s * 0.05, kcy - s * 0.45, m.stroke, Rgba::rgb(255, 255, 255));
-    c.line(kcx + s * 0.5, kcy, kcx + s * 0.05, kcy + s * 0.45, m.stroke, Rgba::rgb(255, 255, 255));
-    Rect::new(x, top, w, h)
 }
 
 pub fn progress_bar(c: &mut Canvas, t: &Theme, x: f32, y: f32, w: f32, value: f32) {
@@ -3448,7 +3433,7 @@ mod tests {
     }
 
     #[test]
-    fn every_language_s_words_on_keys_and_sliders_stay_legible() {
+    fn every_language_s_words_on_keys_and_confirmation_buttons_stay_legible() {
         let t = Theme::light(1200, 2608, 3.0);
         let f = crate::font::bundled();
         let mut c = Canvas::filled(1200, 2608, t.pal.bg);
@@ -3462,10 +3447,10 @@ mod tests {
                 keyboard(&mut c, &t, &f, l, 1000.0, Layer::Letters, None, l.pick(enter));
             }
             keypad(&mut c, &t, &f, l, 1000.0, None);
-            let slides: Vec<&str> = file["confirm"].as_table().unwrap().values().map(|text| text.as_str().unwrap()).collect();
-            assert!(slides.len() > 10, "the sliders' words of {l:?} are read");
-            for label in slides {
-                confirm(&mut c, &t, &f, 400.0, label, false, 0.0);
+            let labels: Vec<&str> = file["confirm"].as_table().unwrap().values().map(|text| text.as_str().unwrap()).collect();
+            assert!(labels.len() > 10, "the button labels of {l:?} are read");
+            for label in labels {
+                action_button(&mut c, &t, &f, 400.0, &label.replace("{name}", "R7"), false, false);
             }
             dock_bar(&t, &f, t.pal.bg, &[l.pick(texts::common::CANCEL), l.pick(texts::files::COPY_HERE)]);
             dock_bar(&t, &f, t.pal.bg, &[l.pick(texts::common::CANCEL), l.pick(texts::files::MOVE_HERE)]);

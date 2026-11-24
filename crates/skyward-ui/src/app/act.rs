@@ -107,7 +107,7 @@ impl App {
                 }
                 self.refresh();
             }
-            Action::Confirm(_) => self.say(l.pick(texts::toast::SLIDE_RIGHT), now),
+            Action::Confirm(which) => return self.confirmed(which, now),
             Action::Slider(_) | Action::Pattern => {}
             Action::Sideload => match self.state.install {
                 Install::Idle | Install::Finished { .. } => {
@@ -143,7 +143,6 @@ impl App {
                 if self.state.systems_work.is_none() {
                     self.state.system_pick = Some(who);
                     self.state.remove_system = None;
-                    self.state.confirm = 0.0;
                     self.refresh();
                 }
             }
@@ -200,12 +199,10 @@ impl App {
             }
             Action::AskRemoveSystem(id) => {
                 self.state.remove_system = Some(id);
-                self.state.confirm = 0.0;
                 self.refresh();
             }
             Action::AskDelete => {
                 self.state.asking_delete = true;
-                self.state.confirm = 0.0;
                 self.refresh();
             }
             Action::Resolve(choice) => {
@@ -709,7 +706,7 @@ impl App {
         Vec::new()
     }
 
-    /// What a swipe-to-confirm control slid to its end does.
+    /// Run the operation selected on the confirmation button.
     pub(super) fn confirmed(&mut self, which: Confirm, now: u64) -> Vec<Effect> {
         let (l, mut fx) = (self.state.lang, Vec::new());
         match which {

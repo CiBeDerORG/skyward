@@ -193,32 +193,32 @@ mod tests {
         let (f, i) = (fonts(), info());
         let mut app = opened(Screen::Backup, &f, &i);
         assert_eq!(app.state.backup, [true, true, false, false, true]);
-        assert!(swipe(&mut app, &f, &i, Confirm::Backup).is_empty(), "internal storage waits for the data partition");
+        assert!(tap_confirm(&mut app, &f, &i, Confirm::Backup).is_empty(), "internal storage waits for the data partition");
         assert_eq!(app.deadline(0), Some(TOAST_MS), "and says so");
         // The owner's files open first; another user's still wait.
         app.data_waiting(Some((10, Keys::Digits)));
         let first = Effect::Backup { parts: [true, true, false, false, true], place: Place::Storage, compress: false, verify: true };
-        assert_eq!(swipe(&mut app, &f, &i, Confirm::Backup), vec![first]);
+        assert_eq!(tap_confirm(&mut app, &f, &i, Confirm::Backup), vec![first]);
         tap(&mut app, &f, &i, Action::BackupPart(MEDIA_PART));
-        assert!(swipe(&mut app, &f, &i, Confirm::Backup).is_empty(), "the users' own files are backed up only with every user's files open");
+        assert!(tap_confirm(&mut app, &f, &i, Confirm::Backup).is_empty(), "the users' own files are backed up only with every user's files open");
         tap(&mut app, &f, &i, Action::BackupPart(MEDIA_PART));
         tap(&mut app, &f, &i, Action::BackupPart(DATA_PART));
-        assert!(swipe(&mut app, &f, &i, Confirm::Backup).is_empty(), "and so is the data partition");
+        assert!(tap_confirm(&mut app, &f, &i, Confirm::Backup).is_empty(), "and so is the data partition");
         app.data_waiting(None);
         tap(&mut app, &f, &i, Action::BackupPart(0));
         assert_eq!(app.state.backup, [false, true, true, false, true]);
         tap(&mut app, &f, &i, Action::BackupTo(Place::UsbDrive));
         tap(&mut app, &f, &i, Action::Toggle(Switch::Compress));
         tap(&mut app, &f, &i, Action::Toggle(Switch::Verify));
-        assert!(swipe(&mut app, &f, &i, Confirm::Backup).is_empty(), "no drive is plugged in");
+        assert!(tap_confirm(&mut app, &f, &i, Confirm::Backup).is_empty(), "no drive is plugged in");
         app.set_usb_drive(Some(UsbDrive::Shown));
         tap(&mut app, &f, &i, Action::BackupPart(MEDIA_PART));
         let second = Effect::Backup { parts: [false, true, true, true, true], place: Place::UsbDrive, compress: true, verify: false };
-        assert_eq!(swipe(&mut app, &f, &i, Confirm::Backup), vec![second]);
+        assert_eq!(tap_confirm(&mut app, &f, &i, Confirm::Backup), vec![second]);
         for k in 1..5 {
             tap(&mut app, &f, &i, Action::BackupPart(k));
         }
-        assert!(swipe(&mut app, &f, &i, Confirm::Backup).is_empty(), "nothing ticked, nothing backed up");
+        assert!(tap_confirm(&mut app, &f, &i, Confirm::Backup).is_empty(), "nothing ticked, nothing backed up");
     }
 
     /// A backup found in `place`, made at `made`, holding `parts`.
@@ -261,7 +261,7 @@ mod tests {
         tap(&mut app, &f, &i, Action::RestorePart(1));
         assert_eq!(app.state.restore.as_ref().map(|r| r.1), Some([true, false, false, false, true]));
         let name = fmt::stamp(1_792_348_260, State::default().zone());
-        assert_eq!(swipe(&mut app, &f, &i, Confirm::Restore), vec![Effect::Restore {
+        assert_eq!(tap_confirm(&mut app, &f, &i, Confirm::Restore), vec![Effect::Restore {
             place: Place::Storage,
             name: name.clone(),
             parts: [true, false, false, false, true]
@@ -269,7 +269,7 @@ mod tests {
         for k in [0, 4] {
             tap(&mut app, &f, &i, Action::RestorePart(k));
         }
-        assert!(swipe(&mut app, &f, &i, Confirm::Restore).is_empty(), "nothing ticked, nothing restored");
+        assert!(tap_confirm(&mut app, &f, &i, Confirm::Restore).is_empty(), "nothing ticked, nothing restored");
         assert_eq!(app.key(Key::Back, 0), vec![Effect::FindBackups { storage: false, usb: false }], "back on the list, it is looked for again");
         assert_eq!((app.screen(), app.state.restore.clone()), (Screen::Restore, None));
     }
@@ -280,14 +280,14 @@ mod tests {
         let mut app = opened(Screen::Restore, &f, &i);
         app.set_backups(vec![found(Place::Storage, 1_792_348_260, [false, false, true, true, false])]);
         tap(&mut app, &f, &i, Action::OpenBackup(0));
-        assert!(swipe(&mut app, &f, &i, Confirm::Restore).is_empty());
+        assert!(tap_confirm(&mut app, &f, &i, Confirm::Restore).is_empty());
         assert_eq!(app.deadline(0), Some(TOAST_MS), "the page says to decrypt first");
         tap(&mut app, &f, &i, Action::RestorePart(DATA_PART));
-        assert!(swipe(&mut app, &f, &i, Confirm::Restore).is_empty(), "the users' own files wait for it as the data partition does");
+        assert!(tap_confirm(&mut app, &f, &i, Confirm::Restore).is_empty(), "the users' own files wait for it as the data partition does");
         assert_eq!(toast(&app), Some("恢复 data 分区或内部存储需先完成「解密」"));
         tap(&mut app, &f, &i, Action::RestorePart(DATA_PART));
         app.data_waiting(None);
-        let fx = swipe(&mut app, &f, &i, Confirm::Restore);
+        let fx = tap_confirm(&mut app, &f, &i, Confirm::Restore);
         assert!(matches!(&fx[..], [Effect::Restore { parts: [false, false, true, true, false], .. }]), "{fx:?}");
     }
 
@@ -299,12 +299,12 @@ mod tests {
         app.set_backups(vec![found(Place::UsbDrive, 1_792_348_260, [true, false, true, true, false])]);
         tap(&mut app, &f, &i, Action::OpenBackup(0));
         app.state.data = Data::Erased;
-        assert!(swipe(&mut app, &f, &i, Confirm::Restore).is_empty(), "there is nothing yet to put the files into");
+        assert!(tap_confirm(&mut app, &f, &i, Confirm::Restore).is_empty(), "there is nothing yet to put the files into");
         assert_eq!(toast(&app), Some("data 分区已清除，需先启动一次系统，重新创建后再恢复"), "and the page says what makes it");
         for k in [DATA_PART, MEDIA_PART] {
             tap(&mut app, &f, &i, Action::RestorePart(k));
         }
-        let fx = swipe(&mut app, &f, &i, Confirm::Restore);
+        let fx = tap_confirm(&mut app, &f, &i, Confirm::Restore);
         assert!(matches!(&fx[..], [Effect::Restore { parts: [true, false, false, false, false], .. }]), "the boot partitions wait for nothing: {fx:?}");
     }
 
@@ -325,7 +325,7 @@ mod tests {
     }
 
     #[test]
-    fn a_backup_is_deleted_once_a_swipe_confirms_it() {
+    fn a_backup_is_deleted_once_the_button_confirms_it() {
         let (f, i) = (fonts(), info());
         let mut app = opened(Screen::Restore, &f, &i);
         app.data_waiting(None);
@@ -334,7 +334,7 @@ mod tests {
         tap(&mut app, &f, &i, Action::OpenBackup(0));
         assert!(app.frame(&f, &i).hits.iter().all(|h| h.action != Action::Confirm(Confirm::DeleteBackup)), "asked for first");
         tap(&mut app, &f, &i, Action::AskDelete);
-        assert_eq!(swipe(&mut app, &f, &i, Confirm::DeleteBackup), vec![Effect::DeleteBackup { place: Place::Storage, name: entry.name }]);
+        assert_eq!(tap_confirm(&mut app, &f, &i, Confirm::DeleteBackup), vec![Effect::DeleteBackup { place: Place::Storage, name: entry.name }]);
         assert!(app.backup_deleted(Err("Permission denied".into()), 0).is_empty());
         assert_eq!(app.screen(), Screen::RestoreBackup, "not deleted, the page stays and says why");
         assert_eq!(app.backup_deleted(Ok(()), 0), vec![Effect::FindBackups { storage: true, usb: false }]);

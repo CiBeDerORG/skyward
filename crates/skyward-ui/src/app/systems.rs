@@ -122,15 +122,15 @@ mod tests {
     use crate::app::testing::*;
 
     #[test]
-    fn an_update_waiting_in_the_slot_merges_with_a_swipe_and_shows_how_far_it_has_come() {
+    fn an_update_waiting_in_the_slot_merges_when_confirmed_and_shows_how_far_it_has_come() {
         let (f, i) = (fonts(), info());
         let mut app = App::new(Screen::Advanced, W, H, PPD);
         app.set_update(Standing::Waiting);
         assert_eq!(tap(&mut app, &f, &i, Action::Open(Screen::Update)), vec![Effect::ReadUpdate], "the page reads where the update stands");
         assert_eq!(app.screen(), Screen::Update);
-        assert_eq!(swipe(&mut app, &f, &i, Confirm::Merge), vec![Effect::Merge]);
+        assert_eq!(tap_confirm(&mut app, &f, &i, Confirm::Merge), vec![Effect::Merge]);
         assert_eq!(app.state.update, Standing::Merging(0.0), "the page turns to the merge at once");
-        assert!(app.frame(&f, &i).hits.is_empty(), "nothing to swipe while it merges");
+        assert!(app.frame(&f, &i).hits.is_empty(), "nothing to confirm while it merges");
         app.set_update(Standing::Merging(0.5));
         assert!(app.frame(&f, &i).hits.is_empty());
         app.set_update(Standing::Merged);
@@ -158,10 +158,10 @@ mod tests {
         assert_eq!(tap(&mut app, &f, &i, Action::Open(Screen::Slot)), vec![Effect::ReadSlots], "read as the page opens");
         let held = BootSlots { active: Slot::B, bootable: [false, true], successful: [true, true] };
         app.set_boot_slots(Ok(held));
-        assert!(swipe(&mut app, &f, &i, Confirm::Slot).is_empty());
+        assert!(tap_confirm(&mut app, &f, &i, Confirm::Slot).is_empty());
         assert_eq!(app.deadline(0), Some(TOAST_MS), "B starts next already");
         tap(&mut app, &f, &i, Action::PickSlot(Slot::A));
-        assert_eq!(swipe(&mut app, &f, &i, Confirm::Slot), vec![Effect::SetSlot(Slot::A)]);
+        assert_eq!(tap_confirm(&mut app, &f, &i, Confirm::Slot), vec![Effect::SetSlot(Slot::A)]);
         let switched = BootSlots { active: Slot::A, bootable: [true, true], ..held };
         app.slot_switched(Ok(switched), 0);
         assert_eq!((app.state.boot_slots.clone(), app.state.next_slot), (Some(Ok(switched)), None), "the pick is done with");
@@ -175,7 +175,7 @@ mod tests {
         let (f, i) = (fonts(), DeviceInfo { slot: Some(Slot::B), snapshot: SnapshotState::Snapshotted, ..info() });
         let mut app = App::new(Screen::Slot, W, H, PPD);
         app.set_boot_slots(Ok(BootSlots { active: Slot::A, bootable: [true, true], successful: [false, true] }));
-        assert!(app.frame(&f, &i).hits.iter().all(|h| !matches!(h.action, Action::Confirm(_))), "nothing to swipe");
+        assert!(app.frame(&f, &i).hits.iter().all(|h| !matches!(h.action, Action::Confirm(_))), "nothing to confirm");
     }
 
     /// The systems with a second one installed, the main one starting.
@@ -202,7 +202,7 @@ mod tests {
         app
     }
 
-    fn swipes(app: &mut App, f: &Fonts, i: &DeviceInfo) -> bool {
+    fn has_confirm_button(app: &mut App, f: &Fonts, i: &DeviceInfo) -> bool {
         app.frame(f, i).hits.iter().any(|h| matches!(h.action, Action::Confirm(_)))
     }
 
@@ -227,9 +227,9 @@ mod tests {
     fn the_systems_page_switches_to_the_system_picked() {
         let (f, i) = (fonts(), info());
         let mut app = systems_page(&f, &i, two_systems());
-        assert!(!swipes(&mut app, &f, &i), "the main system starts already");
+        assert!(!has_confirm_button(&mut app, &f, &i), "the main system starts already");
         tap(&mut app, &f, &i, Action::PickSystem(Who::Guest(ubuntu())));
-        assert_eq!(swipe(&mut app, &f, &i, Confirm::SwitchSystem(Who::Guest(ubuntu()))), vec![Effect::SwitchSystem(Who::Guest(ubuntu()))]);
+        assert_eq!(tap_confirm(&mut app, &f, &i, Confirm::SwitchSystem(Who::Guest(ubuntu()))), vec![Effect::SwitchSystem(Who::Guest(ubuntu()))]);
         assert_eq!((app.state.systems_work, app.state.system_pick), (Some(SystemsWork::Switching(Who::Guest(ubuntu()))), None));
         assert!(app.frame(&f, &i).hits.is_empty(), "nothing to tap while the boot partitions are written");
         // The card tapped darkens and comes back, as a row of a list does.
@@ -240,7 +240,7 @@ mod tests {
         assert_eq!(app.state.systems_work, None);
         app.set_systems(Ok(Overview { starting: Who::Guest(ubuntu()), ..two_systems() }));
         tap(&mut app, &f, &i, Action::PickSystem(Who::Installed));
-        assert_eq!(swipe(&mut app, &f, &i, Confirm::SwitchSystem(Who::Installed)), vec![Effect::SwitchSystem(Who::Installed)]);
+        assert_eq!(tap_confirm(&mut app, &f, &i, Confirm::SwitchSystem(Who::Installed)), vec![Effect::SwitchSystem(Who::Installed)]);
         app.set_systems(Ok(two_systems()));
         tap(&mut app, &f, &i, Action::PickSystem(Who::Guest(ubuntu())));
         app.key(Key::Back, 0);
@@ -259,18 +259,18 @@ mod tests {
     /// A computer wrote the boot partitions over fastboot while they held
     /// the second system's boot images: the page says so, and the main
     /// system's saved images go over what is there only once it is picked
-    /// and swiped.
+    /// and confirmed.
     #[test]
-    fn boot_partitions_written_by_another_hand_are_told_of_and_written_over_once_swiped() {
+    fn boot_partitions_written_by_another_hand_are_told_of_and_written_over_once_confirmed() {
         use skyward_systems::Held;
         let (f, i) = (fonts(), info());
         let second_starts = Overview { starting: Who::Guest(ubuntu()), ..two_systems() };
         let rewritten = Overview { held: Held::Rewritten, ..second_starts.clone() };
         assert!(systems_drawn(&f, &i, rewritten.clone()) != systems_drawn(&f, &i, second_starts), "the page says they were written since");
         let mut app = systems_page(&f, &i, rewritten);
-        assert!(!swipes(&mut app, &f, &i), "nothing is written until the main system is picked");
+        assert!(!has_confirm_button(&mut app, &f, &i), "nothing is written until the main system is picked");
         tap(&mut app, &f, &i, Action::PickSystem(Who::Installed));
-        assert_eq!(swipe(&mut app, &f, &i, Confirm::SwitchSystem(Who::Installed)), vec![Effect::SwitchSystem(Who::Installed)]);
+        assert_eq!(tap_confirm(&mut app, &f, &i, Confirm::SwitchSystem(Who::Installed)), vec![Effect::SwitchSystem(Who::Installed)]);
     }
 
     /// /metadata was erased while the boot partitions held a second
@@ -286,7 +286,7 @@ mod tests {
         assert!(systems_drawn(&f, &i, unrecorded.clone()) != systems_drawn(&f, &i, none_kept), "the page says what the partitions hold");
         let mut app = systems_page(&f, &i, unrecorded);
         tap(&mut app, &f, &i, Action::PickSystem(Who::Installed));
-        assert!(!swipes(&mut app, &f, &i), "nothing Skyward keeps could be written back");
+        assert!(!has_confirm_button(&mut app, &f, &i), "nothing Skyward keeps could be written back");
     }
 
     #[test]
@@ -294,14 +294,14 @@ mod tests {
         let (f, i) = (fonts(), DeviceInfo { snapshot: SnapshotState::Snapshotted, ..info() });
         let mut app = systems_page(&f, &i, two_systems());
         tap(&mut app, &f, &i, Action::PickSystem(Who::Guest(ubuntu())));
-        assert!(!swipes(&mut app, &f, &i), "nothing to swipe");
+        assert!(!has_confirm_button(&mut app, &f, &i), "nothing to confirm");
         app.set_systems(Ok(Overview { starting: Who::Guest(ubuntu()), ..two_systems() }));
         tap(&mut app, &f, &i, Action::PickSystem(Who::Installed));
-        assert_eq!(swipe(&mut app, &f, &i, Confirm::SwitchSystem(Who::Installed)), vec![Effect::SwitchSystem(Who::Installed)], "back to the main system to merge it");
+        assert_eq!(tap_confirm(&mut app, &f, &i, Confirm::SwitchSystem(Who::Installed)), vec![Effect::SwitchSystem(Who::Installed)], "back to the main system to merge it");
     }
 
     #[test]
-    fn the_second_system_is_removed_once_asked_and_swiped() {
+    fn the_second_system_is_removed_once_asked_and_confirmed() {
         let (f, i) = (fonts(), info());
         let mut app = systems_page(&f, &i, two_systems());
         tap(&mut app, &f, &i, Action::PickSystem(Who::Guest(ubuntu())));
@@ -309,7 +309,7 @@ mod tests {
         app.state.data = Data::Open;
         app.refresh();
         tap(&mut app, &f, &i, Action::AskRemoveSystem(ubuntu()));
-        assert_eq!(swipe(&mut app, &f, &i, Confirm::RemoveSystem(ubuntu())), vec![Effect::RemoveSystem(ubuntu())]);
+        assert_eq!(tap_confirm(&mut app, &f, &i, Confirm::RemoveSystem(ubuntu())), vec![Effect::RemoveSystem(ubuntu())]);
         assert_eq!((app.state.systems_work, app.state.remove_system), (Some(SystemsWork::Removing), None));
         app.set_systems(Ok(Overview { others: Vec::new(), ..two_systems() }));
         assert_eq!(app.state.systems_work, None);
@@ -347,7 +347,7 @@ mod tests {
         let mut app = systems_page(&f, &i, systems.clone());
         assert!(app.frame(&f, &i).hits.iter().any(|h| h.action == Action::Open(Screen::Install)));
         tap(&mut app, &f, &i, Action::PickSystem(other));
-        assert_eq!(swipe(&mut app, &f, &i, Confirm::SwitchSystem(other)), vec![Effect::SwitchSystem(other)]);
+        assert_eq!(tap_confirm(&mut app, &f, &i, Confirm::SwitchSystem(other)), vec![Effect::SwitchSystem(other)]);
 
         app.set_systems(Ok(systems.clone()));
         app.state.data = Data::Open;
@@ -372,11 +372,7 @@ mod tests {
         // The package lit the panel, so the user looks and taps past the
         // wake guard.
         tap_at(&mut app, &f, &i, Action::SystemSize(1), 1000);
-        let track = app.frame(&f, &i).hits.iter().find(|h| h.action == Action::Confirm(Confirm::InstallSystem)).unwrap().rect;
-        let y = track.centre().1 - app.top().1;
-        app.touch(Touch::Down(track.x + track.h / 2.0, y), &f, 1000);
-        app.touch(Touch::Move(track.x + track.w, y), &f, 1000);
-        assert_eq!(app.touch(Touch::Up, &f, 1000), vec![Effect::InstallSystem { size: 8 << 30 }]);
+        assert_eq!(tap_at(&mut app, &f, &i, Action::Confirm(Confirm::InstallSystem), 1000), vec![Effect::InstallSystem { size: 8 << 30 }]);
         assert_eq!(app.state.install, Install::Systeming { name: "Ubuntu Touch".into(), stage: None });
         app.install(Event::Progress(Stage::Root { done: 1 << 30, total: 6 << 30 }), 1000);
         assert_eq!(app.state.install, Install::Systeming { name: "Ubuntu Touch".into(), stage: Some(Stage::Root { done: 1 << 30, total: 6 << 30 }) });

@@ -143,7 +143,7 @@ mod tests {
         let mut app = App::new(Screen::CantStart, W, H, PPD);
         app.set_asked(Asked { reason: Some("RescueParty".into()), ..Asked::default() });
         assert_eq!(tap(&mut app, &f, &i, Action::RebootTo(Target::System)), vec![Effect::Reboot(Target::System)]);
-        assert_eq!(swipe(&mut app, &f, &i, Confirm::FactoryReset), vec![Effect::FactoryReset]);
+        assert_eq!(tap_confirm(&mut app, &f, &i, Confirm::FactoryReset), vec![Effect::FactoryReset]);
         assert_eq!(tap(&mut app, &f, &i, Action::Dismiss), vec![Effect::Dismiss]);
         assert_eq!(app.screen(), Screen::Home);
         app.key(Key::Back, 0);
@@ -188,22 +188,22 @@ mod tests {
         let (f, i) = (fonts(), info());
         let mut app = opened(Screen::Wipe, &f, &i);
         let chosen = |app: &App| WIPES.iter().zip(app.state.wipe).filter(|(_, on)| *on).map(|(&w, _)| w).collect::<Vec<_>>();
-        assert!(swipe(&mut app, &f, &i, Confirm::Wipe).is_empty(), "nothing is chosen at first");
+        assert!(tap_confirm(&mut app, &f, &i, Confirm::Wipe).is_empty(), "nothing is chosen at first");
         for part in [Wipe::Updates, Wipe::Logs, Wipe::Art, Wipe::SystemCaches, Wipe::AppCaches, Wipe::Media, Wipe::AppData] {
             tap(&mut app, &f, &i, Action::WipeItem(part));
         }
         let parts = vec![Wipe::AppData, Wipe::Media, Wipe::AppCaches, Wipe::SystemCaches, Wipe::Art, Wipe::Logs, Wipe::Updates];
         assert_eq!(chosen(&app), parts, "every part the page lists can be chosen with the others");
-        assert_eq!(swipe(&mut app, &f, &i, Confirm::Wipe), vec![Effect::Wipe(parts)], "in the order listed");
+        assert_eq!(tap_confirm(&mut app, &f, &i, Confirm::Wipe), vec![Effect::Wipe(parts)], "in the order listed");
         tap(&mut app, &f, &i, Action::WipeItem(Wipe::All));
         assert_eq!(chosen(&app), [Wipe::All], "everything takes the parts in");
         tap(&mut app, &f, &i, Action::WipeItem(Wipe::Art));
         assert_eq!(chosen(&app), [Wipe::Art], "a part on its own leaves everything out");
-        assert_eq!(swipe(&mut app, &f, &i, Confirm::Wipe), vec![Effect::Wipe(vec![Wipe::Art])]);
+        assert_eq!(tap_confirm(&mut app, &f, &i, Confirm::Wipe), vec![Effect::Wipe(vec![Wipe::Art])]);
         tap(&mut app, &f, &i, Action::WipeItem(Wipe::Art));
         assert!(chosen(&app).is_empty(), "tapped again, a part is left out");
         tap(&mut app, &f, &i, Action::WipeItem(Wipe::All));
-        assert_eq!(swipe(&mut app, &f, &i, Confirm::Wipe), vec![Effect::Wipe(vec![Wipe::All])]);
+        assert_eq!(tap_confirm(&mut app, &f, &i, Confirm::Wipe), vec![Effect::Wipe(vec![Wipe::All])]);
     }
 
     #[test]
@@ -217,7 +217,7 @@ mod tests {
         assert!(offered(&mut app));
         tap(&mut app, &f, &i, Action::WipeItem(Wipe::Cache));
         tap(&mut app, &f, &i, Action::WipeItem(Wipe::Media));
-        assert_eq!(swipe(&mut app, &f, &i, Confirm::Wipe), vec![Effect::Wipe(vec![Wipe::Media, Wipe::Cache])], "in the order listed");
+        assert_eq!(tap_confirm(&mut app, &f, &i, Confirm::Wipe), vec![Effect::Wipe(vec![Wipe::Media, Wipe::Cache])], "in the order listed");
     }
 
     #[test]
